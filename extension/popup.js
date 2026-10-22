@@ -44,12 +44,15 @@ $('add').onclick = async () => {
 $('save').onclick = async () => {
   const url = $('url').value.trim().replace(/\/$/, '');
   const sites = $('sites').value.split(',').map(s => s.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')).filter(Boolean);
-  let origin;
-  try { origin = new URL(url).origin; } catch { msg('That Banking Aid address isn’t a web address.'); return; }
-  // Firefox's say-so to reach Banking Aid and to run on the bank sites
-  const ok = await browser.permissions.request({ origins: [origin + '/*', ...patternsFor(sites)] }).catch(() => false);
-  if (!ok) { msg('Firefox needs permission for those addresses.'); return; }
+  let host;
+  // Firefox's address patterns can't carry a port: ask for the whole host
+  // ("http://192.168.1.10/*"), which covers Banking Aid on any port
+  try { const u = new URL(url); host = `${u.protocol}//${u.hostname}/*`; } catch { msg('That Banking Aid address isn’t a web address.'); return; }
+  // saved first: the permission prompt can close this menu
   await browser.storage.local.set({ url, token: $('token').value.trim(), sites });
+  // Firefox's say-so to reach Banking Aid and to run on the bank sites
+  const ok = await browser.permissions.request({ origins: [host, ...patternsFor(sites)] }).catch(() => false);
+  if (!ok) { msg('Firefox needs permission for those addresses — press Save & test and allow it.'); return; }
   msg('Testing…');
   const r = await browser.runtime.sendMessage({ type: 'test' });
   msg(r.ok ? `✓ Connected: ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.` : `✕ ${r.error}`);

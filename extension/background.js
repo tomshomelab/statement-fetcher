@@ -11,6 +11,12 @@ const settings = async () => ({ url: '', token: '', sites: [], ...(await browser
 async function ba(path, init = {}) {
   const { url, token } = await settings();
   if (!url) throw new Error('Set your Banking Aid address in the extension’s settings');
+  // without Firefox's permission for the host the request is blocked outright
+  // ("NetworkError"); say what to do instead
+  const u = new URL(url);
+  if (!await browser.permissions.contains({ origins: [`${u.protocol}//${u.hostname}/*`] })) {
+    throw new Error(`Firefox hasn’t given the add-on access to ${u.hostname} yet: open Settings, press Save & test and allow it`);
+  }
   const headers = { ...(init.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
   const r = await fetch(url.replace(/\/$/, '') + path, { ...init, headers, credentials: 'include' });
