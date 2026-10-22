@@ -11,6 +11,11 @@
           "version": "1.0.2",
           "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.2.xpi",
           "update_hash": "sha256:d46948d5eb6539d2f73e9b426da3f4645e28ffc18dec1f0713f19e610097629d"
+        },
+        {
+          "version": "1.0.3",
+          "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.3.xpi",
+          "update_hash": "sha256:001ebf6418d3f93d45c700cf2a329111b00b13286a3c63e99179e3b3dbdbdcdd"
         }
       ]
     }
