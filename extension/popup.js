@@ -5,6 +5,7 @@ const siteOf = host => { const p = host.split('.'); return p.slice(/\.(co|com|or
 const patternsFor = sites => sites.flatMap(s => [`https://${s}/*`, `https://*.${s}/*`]);
 
 let current = { url: '', token: '', sites: [] };
+let activeTab = null; // looked up now: the buttons must ask Firefox before awaiting anything
 (async () => {
   current = { ...current, ...(await browser.storage.local.get(['url', 'token', 'sites'])) };
   $('url').value = current.url;
@@ -13,6 +14,7 @@ let current = { url: '', token: '', sites: [] };
   if (!current.url || !current.token) $('settings').open = true;
   if (!$('add')) return; // the Options page has the settings only
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  activeTab = tab;
   try {
     const host = new URL(tab.url).hostname;
     if (/^https:/.test(tab.url) && !current.sites.includes(siteOf(host))) { $('add').hidden = false; $('add').textContent = `Use on ${siteOf(host)}`; }
@@ -29,11 +31,13 @@ if ($('show')) $('show').onclick = async () => {
   }
 };
 
-// add the open tab's site: ask Firefox for it, remember it, run on it now
+// add the open tab's site: ask Firefox for it, remember it, run on it now.
+// Firefox only shows its permission prompt when asked straight from the
+// click — nothing may be awaited before permissions.request
 if ($('add')) $('add').onclick = async () => {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const tab = activeTab;
   const site = siteOf(new URL(tab.url).hostname);
-  if (!await browser.permissions.request({ origins: patternsFor([site]) }).catch(() => false)) { msg('Firefox needs permission to run on that site.'); return; }
+  if (!await browser.permissions.request({ origins: patternsFor([site]) }).catch(() => false)) { msg('Firefox needs permission to run on that site: press the button again and choose Allow.'); return; }
   current.sites = [...new Set([...current.sites, site])];
   await browser.storage.local.set({ sites: current.sites });
   $('sites').value = current.sites.join(', ');
@@ -49,11 +53,12 @@ $('save').onclick = async () => {
   // Firefox's address patterns can't carry a port: ask for the whole host
   // ("http://192.168.1.10/*"), which covers Banking Aid on any port
   try { const u = new URL(url); host = `${u.protocol}//${u.hostname}/*`; } catch { msg('That Banking Aid address isn’t a web address.'); return; }
-  // saved first: the permission prompt can close this menu
+  // Firefox's say-so to reach Banking Aid and to run on the bank sites —
+  // asked straight from the click (an await first and Firefox refuses silently);
+  // the settings are kept either way
+  const asking = browser.permissions.request({ origins: [host, ...patternsFor(sites)] }).catch(() => false);
   await browser.storage.local.set({ url, token: $('token').value.trim(), sites });
-  // Firefox's say-so to reach Banking Aid and to run on the bank sites
-  const ok = await browser.permissions.request({ origins: [host, ...patternsFor(sites)] }).catch(() => false);
-  if (!ok) { msg('Firefox needs permission for those addresses — press Save & test and allow it.'); return; }
+  if (!await asking) { msg('Firefox needs permission for those addresses: press Save & test again and choose Allow.'); return; }
   msg('Testing…');
   const r = await browser.runtime.sendMessage({ type: 'test' });
   msg(r.ok ? `✓ Connected: ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.` : `✕ ${r.error}`);
