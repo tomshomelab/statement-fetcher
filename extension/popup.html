@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 300px; margin: 0; padding: 14px; font: 13px/1.45 system-ui, sans-serif; background: #1a1a19; color: #eee; }
+  h1 { font-size: 14px; margin: 0 0 10px; }
+  button { width: 100%; padding: 8px; border: 0; border-radius: 8px; background: #2b6fd6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: #333; margin-top: 6px; }
+  label { display: block; margin-top: 10px; color: #aaa; font-size: 12px; }
+  input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-top: 3px; border-radius: 6px; border: 1px solid #444; background: #111; color: #eee; font: inherit; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: #aaa; }
+  #msg { margin-top: 8px; color: #aaa; min-height: 1em; }
+</style>
+</head>
+<body>
+<h1>💷 Banking Aid statement fetcher</h1>
+<button id="show">Show missing statements on this page</button>
+<button id="add" class="ghost" hidden>Use on this site</button>
+<p id="msg"></p>
+<details id="settings">
+  <summary>Settings</summary>
+  <label>Banking Aid address <input id="url" spellcheck="false" placeholder="http://192.168.1.10:8585"></label>
+  <label>API token <span>(Banking Aid → Settings → your sign-in card)</span><input id="token" spellcheck="false" type="password"></label>
+  <label>Bank sites <span>(comma-separated, e.g. mybank.co.uk)</span><input id="sites" spellcheck="false"></label>
+  <button id="save" class="ghost">Save &amp; test</button>
+</details>
+<script src="popup.js"></script>
+</body>
+</html>
