@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Banking Aid statement fetcher",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "On your bank's statements page, finds the statements your Banking Aid is missing, downloads each one and sends it straight to Banking Aid.",
   "icons": {
     "48": "icons/icon.svg",
@@ -17,7 +17,9 @@
     "https://*/*"
   ],
   "background": {
-    "scripts": ["background.js"],
+    "scripts": [
+      "background.js"
+    ],
     "persistent": true
   },
   "browser_action": {
@@ -34,7 +36,9 @@
       "strict_min_version": "140.0",
       "update_url": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/updates.json",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }

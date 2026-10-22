@@ -1,0 +1,13 @@
+{
+  "addons": {
+    "statement-fetcher@tomshomelab.github.io": {
+      "updates": [
+        {
+          "version": "1.0.1",
+          "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.1.xpi",
+          "update_hash": "sha256:c2eaa8e04472e5e749bbf8bd17446fe3c09b64bdb9a6087e912aa69a951fd4b7"
+        }
+      ]
+    }
+  }
+}
