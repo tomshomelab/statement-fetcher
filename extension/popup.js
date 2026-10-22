@@ -11,6 +11,7 @@ let current = { url: '', token: '', sites: [] };
   $('token').value = current.token;
   $('sites').value = current.sites.join(', ');
   if (!current.url || !current.token) $('settings').open = true;
+  if (!$('add')) return; // the Options page has the settings only
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   try {
     const host = new URL(tab.url).hostname;
@@ -18,7 +19,7 @@ let current = { url: '', token: '', sites: [] };
   } catch { /* not a web page */ }
 })();
 
-$('show').onclick = async () => {
+if ($('show')) $('show').onclick = async () => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   try {
     await browser.tabs.sendMessage(tab.id, { type: 'toggle' });
@@ -29,7 +30,7 @@ $('show').onclick = async () => {
 };
 
 // add the open tab's site: ask Firefox for it, remember it, run on it now
-$('add').onclick = async () => {
+if ($('add')) $('add').onclick = async () => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   const site = siteOf(new URL(tab.url).hostname);
   if (!await browser.permissions.request({ origins: patternsFor([site]) }).catch(() => false)) { msg('Firefox needs permission to run on that site.'); return; }
