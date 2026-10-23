@@ -51,6 +51,6 @@ $('save').onclick = async () => {
   await browser.storage.local.set({ url: current.url, token: current.token });
   if (!await asking) { msg('Firefox needs your OK to reach Banking Aid: press Save & test again and choose Allow.'); return; }
   msg('Testing…');
-  const r = await browser.runtime.sendMessage({ type: 'test' }).catch(e => ({ ok: false, error: 'the add-on’s background didn’t answer (' + e.message + ')' }));
+  const r = await browser.runtime.sendMessage({ type: 'test', cfg: { url: current.url, token: current.token } }).catch(e => ({ ok: false, error: 'the add-on’s background didn’t answer (' + e.message + ')' }));
   msg(r.ok ? `✓ Connected: ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.` : `✕ ${r.error}`);
 };

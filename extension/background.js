@@ -8,8 +8,13 @@
 
 const settings = async () => ({ url: '', token: '', sites: [], ...(await browser.storage.local.get(['url', 'token', 'sites'])) });
 
-async function ba(path, init = {}) {
-  const { url, token } = await settings();
+// cfg: the address and token, sent along by the menu or the page panel —
+// reading storage here failed in some Firefox profiles ("An unexpected error
+// occurred"), so the background only falls back to it
+async function ba(path, init = {}, cfg = null) {
+  let url, token;
+  try { ({ url, token } = cfg && cfg.url ? cfg : await settings()); }
+  catch (e) { throw new Error('reading the add-on’s settings failed (' + e.message + ')'); }
   if (!url) throw new Error('Set your Banking Aid address in the extension’s settings');
   const headers = { ...(init.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
@@ -26,11 +31,11 @@ async function ba(path, init = {}) {
   return body;
 }
 
-async function upload({ card, name, bytes }) {
+async function upload({ card, name, bytes }, cfg) {
   const form = new FormData();
   form.append('account', card || 'Unsorted');
   form.append('files', new File([bytes], name.replace(/[^\w .()-]/g, '_'), { type: 'application/pdf' }));
-  await ba('/api/import?async=1', { method: 'POST', body: form });
+  await ba('/api/import?async=1', { method: 'POST', body: form }, cfg);
   return { ok: true };
 }
 
@@ -71,7 +76,7 @@ browser.downloads.onCreated.addListener(async item => {
 
 browser.runtime.onMessage.addListener(async (msg, sender) => {
   switch (msg.type) {
-    case 'gaps': return ba('/api/statements/gaps');
+    case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
     case 'arm': armed = { tabId: sender.tab.id, until: Date.now() + (msg.ms || 30000) }; return { ok: true };
     case 'disarm': if (armed && armed.tabId === sender.tab.id) armed = null; return { ok: true };
     // a statement's file, read by the tab or fetched here from an https link
@@ -82,12 +87,12 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
         bytes = await r.arrayBuffer();
       }
       if (!isPdf(bytes)) return { ok: false, error: 'not a PDF' };
-      try { return await upload({ card: msg.card, name: msg.name, bytes }); }
+      try { return await upload({ card: msg.card, name: msg.name, bytes }, msg.cfg); }
       catch (e) { return { ok: false, error: e.message }; }
     }
     case 'test': {
-      try { const g = await ba('/api/statements/gaps'); return { ok: true, cards: (g.cards || []).length }; }
-      catch (e) { return { ok: false, error: e.message }; }
+      try { const g = await ba('/api/statements/gaps', {}, msg.cfg); return { ok: true, cards: (g.cards || []).length }; }
+      catch (e) { return { ok: false, error: e.message + (e.stack ? ' [at ' + String(e.stack).split('\n')[0].slice(0, 80) + ']' : '') }; }
     }
   }
 });

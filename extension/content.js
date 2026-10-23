@@ -89,9 +89,12 @@
   // found in this site's address ("mybank" in online.mybank.co.uk). Only that
   // bank's cards are looked for; if none matches, every card is.
   let BANK = null;
+  let cfg = null; // Banking Aid address + token, sent with every request
   const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const loadCards = async () => {
-    let res = await browser.runtime.sendMessage({ type: 'gaps' });
+    cfg = await browser.storage.local.get(['url', 'token']);
+    let res = await browser.runtime.sendMessage({ type: 'gaps', cfg });
+    if (res && res.error) throw new Error(res.error);
     const host = squash(location.hostname);
     const mine = (res.cards || []).filter(c => squash(c.bank).length >= 3 && host.includes(squash(c.bank)));
     BANK = mine.length ? mine[0].bank : null;
@@ -237,7 +240,7 @@
         if (!file) { state[h.key] = 'failed'; failed++; say('Could not get ' + h.card + ' ' + h.date + ' — open it yourself and drop it on Banking Aid’s Import tab.'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
-          const r = await browser.runtime.sendMessage({ type: 'upload', card: h.card, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+          const r = await browser.runtime.sendMessage({ type: 'upload', cfg, card: h.card, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
           state[h.key] = r && r.ok ? 'sent' : 'failed';
           r && r.ok ? sent++ : failed++;
           if (!r || !r.ok) say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed'));
