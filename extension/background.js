@@ -52,7 +52,7 @@ async function registerSites() {
     const { sites } = await settings();
     const allowed = [];
     for (const s of sites) if (await browser.permissions.contains({ origins: patternsFor([s]) }).catch(() => false)) allowed.push(s);
-    if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'log.js' }, { file: 'content.js' }], runAt: 'document_idle' });
+    if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'log.js' }, { file: 'rpc.js' }, { file: 'content.js' }], runAt: 'document_idle' });
   } catch (e) { console.warn('statement fetcher: could not register sites', e); }
 }
 registerSites();
@@ -80,6 +80,19 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   return handle(msg, sender).then(
     r => { dlog('message out', msg.type, r && typeof r === 'object' ? { ok: r.ok, error: r.error, keys: Object.keys(r) } : r); return r; },
     e => { dlog('message FAILED', msg.type, e); return Promise.reject(e); });
+});
+// the same requests over a port (rpc.js): replies travel as messages, which
+// arrive even where sendMessage's replies don't
+browser.runtime.onConnect.addListener(port => {
+  if (port.name !== 'rpc') return;
+  port.onMessage.addListener(async ({ id, msg }) => {
+    dlog('rpc in', msg);
+    try {
+      const r = await handle(msg, port.sender);
+      dlog('rpc out', msg.type, r && typeof r === 'object' ? { ok: r.ok, error: r.error, keys: Object.keys(r) } : r);
+      port.postMessage({ id, r });
+    } catch (e) { dlog('rpc FAILED', msg.type, e); port.postMessage({ id, error: e.message }); }
+  });
 });
 async function handle(msg, sender) {
   switch (msg.type) {

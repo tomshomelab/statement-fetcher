@@ -93,7 +93,7 @@
   const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const loadCards = async () => {
     cfg = await browser.storage.local.get(['url', 'token']);
-    let res = await browser.runtime.sendMessage({ type: 'gaps', cfg });
+    let res = await call({ type: 'gaps', cfg });
     if (res && res.error) throw new Error(res.error);
     const host = squash(location.hostname);
     const mine = (res.cards || []).filter(c => squash(c.bank).length >= 3 && host.includes(squash(c.bank)));
@@ -157,7 +157,7 @@
   // pressing the viewer's Download button so it becomes a caught download
   const getFile = async (h, log) => {
     const got = new Promise(resolve => { caught = resolve; });
-    await browser.runtime.sendMessage({ type: 'arm', ms: 35000 });
+    await call({ type: 'arm', ms: 35000 });
     open(h);
     let pressed = false;
     const until = Date.now() + 30000;
@@ -182,7 +182,7 @@
       return null;
     } finally {
       caught = null;
-      browser.runtime.sendMessage({ type: 'disarm' });
+      call({ type: 'disarm' });
     }
   };
 
@@ -242,7 +242,7 @@
         if (!file) { state[h.key] = 'failed'; failed++; say('Could not get ' + h.card + ' ' + h.date + ' — open it yourself and drop it on Banking Aid’s Import tab.'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
-          const r = await browser.runtime.sendMessage({ type: 'upload', cfg, card: h.card, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+          const r = await call({ type: 'upload', cfg, card: h.card, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
           state[h.key] = r && r.ok ? 'sent' : 'failed';
           r && r.ok ? sent++ : failed++;
           if (!r || !r.ok) say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed'));
