@@ -11,7 +11,7 @@ works through the next pages until nothing is missing.
 Only in your browser (`browser.storage.local`), never anywhere else:
 
 - your Banking Aid address and API token
-- the bank sites you've turned it on for
+- the bank sites you've used it on
 - which statements it has already sent (card name + statement date)
 
 Statement PDFs pass through memory straight to your Banking Aid. The add-on
@@ -26,7 +26,7 @@ It updates itself from `updates.json`.
 
 1. Toolbar button → **Settings**: your Banking Aid address, your API token
    (Banking Aid → Settings → your sign-in card) and your bank's site.
-2. Open your bank's statements page, toolbar button → **Show missing
+2. Open your bank's statements page, toolbar button → **Fetch missing
    statements on this page** → **Send all to Banking Aid**.
 
 ## Release

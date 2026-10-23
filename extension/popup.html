@@ -16,14 +16,12 @@
 </head>
 <body>
 <h1>💷 Banking Aid statement fetcher</h1>
-<button id="show">Show missing statements on this page</button>
-<button id="add" class="ghost" hidden>Use on this site</button>
+<button id="show">Fetch missing statements here</button>
 <p id="msg"></p>
 <details id="settings">
   <summary>Settings</summary>
   <label>Banking Aid address <input id="url" spellcheck="false" placeholder="http://192.168.1.10:8585"></label>
   <label>API token <span>(Banking Aid → Settings → your sign-in card)</span><input id="token" spellcheck="false" type="password"></label>
-  <label>Bank sites <span>(comma-separated, e.g. mybank.co.uk)</span><input id="sites" spellcheck="false"></label>
   <button id="save" class="ghost">Save &amp; test</button>
 </details>
 <script src="popup.js"></script>

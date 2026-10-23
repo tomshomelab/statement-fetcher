@@ -85,8 +85,17 @@
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
+  // which bank this page belongs to: the bank name Banking Aid has for a card,
+  // found in this site's address ("mybank" in online.mybank.co.uk). Only that
+  // bank's cards are looked for; if none matches, every card is.
+  let BANK = null;
+  const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const loadCards = async () => {
-    const res = await browser.runtime.sendMessage({ type: 'gaps' });
+    let res = await browser.runtime.sendMessage({ type: 'gaps' });
+    const host = squash(location.hostname);
+    const mine = (res.cards || []).filter(c => squash(c.bank).length >= 3 && host.includes(squash(c.bank)));
+    BANK = mine.length ? mine[0].bank : null;
+    if (mine.length) res = { ...res, cards: mine };
     // a card is found by the words of its name or label — not its bank's
     // name, which the bank's own page doesn't repeat on every line
     const STOP = ['card', 'account', 'statement', 'the', 'isa', 'and'];
@@ -254,7 +263,8 @@
     panel = make('div', 'position:fixed;top:12px;right:12px;z-index:2147483647;width:400px;max-height:82vh;overflow:auto;background:#1a1a19;color:#fff;border:1px solid #555;border-radius:12px;padding:14px;font:13px/1.5 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)');
     panel.id = 'ba-fetch-panel';
     const head = make('div', 'display:flex;gap:8px;align-items:center');
-    head.appendChild(make('strong', 'flex:1', 'Banking Aid - missing statements'));
+    const title = make('strong', 'flex:1', 'Banking Aid - missing statements');
+    head.appendChild(title);
     const x = make('button', 'background:none;border:none;color:#aaa;cursor:pointer;font-size:15px', 'x');
     x.onclick = () => toggle();
     head.appendChild(x);
@@ -276,7 +286,7 @@
     stopBtn.onclick = () => { stop = true; say('Stopping after this one…'); };
     sendBtn.onclick = sendAll;
     reset.onclick = () => { state = {}; save(); hits = findHits(); render(); };
-    try { await loadCards(); await loadState(); }
+    try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     hits = findHits(); render();
   };

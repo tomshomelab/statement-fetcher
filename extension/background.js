@@ -11,17 +11,18 @@ const settings = async () => ({ url: '', token: '', sites: [], ...(await browser
 async function ba(path, init = {}) {
   const { url, token } = await settings();
   if (!url) throw new Error('Set your Banking Aid address in the extension’s settings');
-  // without Firefox's permission for the host the request is blocked outright
-  // ("NetworkError"); say what to do instead
-  const u = new URL(url);
-  if (!await browser.permissions.contains({ origins: [`${u.protocol}//${u.hostname}/*`] })) {
-    throw new Error(`Firefox hasn’t given the add-on access to ${u.hostname} yet: open Settings, press Save & test and allow it`);
-  }
   const headers = { ...(init.headers || {}) };
   if (token) headers.authorization = 'Bearer ' + token;
-  const r = await fetch(url.replace(/\/$/, '') + path, { ...init, headers, credentials: 'include' });
+  let r;
+  try { r = await fetch(url.replace(/\/$/, '') + path, { ...init, headers, credentials: 'include' }); }
+  catch (e) {
+    // blocked before it left the browser: usually Firefox's permission for the
+    // host is missing ("NetworkError"); say what to do instead
+    const host = new URL(url).hostname;
+    throw new Error(`Couldn’t reach Banking Aid at ${host} (${e.message}). If Firefox hasn’t been allowed access to ${host}, open Settings, press Save & test and choose Allow; otherwise check Banking Aid is running`);
+  }
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || `Banking Aid answered ${r.status}`);
+  if (!r.ok) throw new Error(r.status === 401 ? 'Banking Aid didn’t accept the API token: copy it again from Banking Aid → Settings' : (body.error || `Banking Aid answered ${r.status}`));
   return body;
 }
 
@@ -39,14 +40,20 @@ const isPdf = bytes => bytes && bytes.byteLength > 500 && String.fromCharCode(..
 // registered from the settings, so no bank is named in the add-on itself
 const patternsFor = sites => sites.flatMap(s => [`https://${s}/*`, `https://*.${s}/*`]);
 let registered = null;
+// only sites Firefox has actually allowed: registering one it hasn't throws
 async function registerSites() {
-  if (registered) { await registered.unregister(); registered = null; }
-  const { sites } = await settings();
-  if (!sites.length) return;
-  registered = await browser.contentScripts.register({ matches: patternsFor(sites), js: [{ file: 'content.js' }], runAt: 'document_idle' });
+  try {
+    if (registered) { await registered.unregister(); registered = null; }
+    const { sites } = await settings();
+    const allowed = [];
+    for (const s of sites) if (await browser.permissions.contains({ origins: patternsFor([s]) }).catch(() => false)) allowed.push(s);
+    if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'content.js' }], runAt: 'document_idle' });
+  } catch (e) { console.warn('statement fetcher: could not register sites', e); }
 }
 registerSites();
 browser.storage.onChanged.addListener(changes => { if (changes.sites) registerSites(); });
+browser.permissions.onAdded.addListener(registerSites);
+browser.permissions.onRemoved.addListener(registerSites);
 
 // ── catching the bank's download ──────────────────────────────────────────
 // armed: the tab waiting for a statement. A download that starts while armed
@@ -79,7 +86,7 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
       catch (e) { return { ok: false, error: e.message }; }
     }
     case 'test': {
-      try { const g = await ba('/api/statements/gaps'); return { ok: true, cards: g.cards.length }; }
+      try { const g = await ba('/api/statements/gaps'); return { ok: true, cards: (g.cards || []).length }; }
       catch (e) { return { ok: false, error: e.message }; }
     }
   }
