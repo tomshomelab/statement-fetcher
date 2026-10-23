@@ -73,6 +73,7 @@ const relDir = path.join(root, 'releases');
 mkdirSync(relDir, { recursive: true });
 const outName = `statement_fetcher-${version}.xpi`;
 copyFileSync(xpi, path.join(relDir, outName));
+copyFileSync(xpi, path.join(relDir, 'latest.xpi')); // a link that always installs the newest
 const hash = createHash('sha256').update(readFileSync(xpi)).digest('hex');
 const updatesPath = path.join(root, 'updates.json');
 const updates = existsSync(updatesPath) ? JSON.parse(readFileSync(updatesPath, 'utf8')) : { addons: {} };

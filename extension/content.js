@@ -11,14 +11,23 @@
   const MN = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   const pad = n => String(n).padStart(2, '0');
   const iso = (y, m, d) => (y < 100 ? 2000 + y : y) + '-' + pad(m) + '-' + pad(d);
-  const DATE = /\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\b/gi;
-  const dateIn = t => {
-    let r = t.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/);
+  // dates as banks print them: 08/10/2026, 8/10/26, 05 Sep 26, 5th September 2026
+  const D_NUM = String.raw`\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b`;
+  const D_TXT = String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(?:\d{4}|\d{2})\b`;
+  const DATE = new RegExp(`${D_NUM}|${D_TXT}`, 'gi');
+  // a statement's period, "05 Sep 26 - 06 Oct 26", is one date for row-finding
+  const RANGE = new RegExp(`(${D_NUM}|${D_TXT})\\s*(?:-|–|—|to)\\s*(${D_NUM}|${D_TXT})`, 'gi');
+  const parseDate = s => {
+    let r = s.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);
     if (r) return iso(+r[3], +r[2], +r[1]);
-    r = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4})\b/i);
+    r = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4}|\d{2})/i);
     return r ? iso(+r[3], MN[r[2].slice(0, 3).toLowerCase()], +r[1]) : null;
   };
+  const dateIn = t => { const m = String(t).match(DATE); return m ? parseDate(m[0]) : null; };
+  const periodIn = t => { const r = new RegExp(RANGE.source, 'i').exec(t); return r ? { a: parseDate(r[1]), b: parseDate(r[2]) } : null; };
+  const dateUnits = t => { const ranges = (t.match(RANGE) || []).length; return ranges + (t.replace(RANGE, ' ').match(DATE) || []).length; };
   const days = (a, b) => Math.abs(new Date(a) - new Date(b)) / 86400000;
+  const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
   const stems = t => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3).map(w => w.slice(0, 5)));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   // a component's innerText leaves out its shadow content: read the composed text
@@ -62,22 +71,28 @@
       let row = n.parentElement;
       for (let p = up(row); p && p !== document.body && p.nodeName !== 'HTML'; p = up(p)) {
         const t = textOf(p);
-        if (t.length > 300 || (t.match(DATE) || []).length > 1) break;
+        if (t.length > 300 || dateUnits(t) > 1) break;
         row = p;
       }
       rows.set(row, n.parentElement);
     });
     seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '' };
     const hits = [];
+    const whole = pageCard();
     for (const [row, leaf] of rows) {
       const text = textOf(row);
       // transaction statements only: not letters, notices, annual summaries or
       // statements of fees (no payments in them to import)
       if (!/statement/i.test(text) || /\b(annual|fees?|summary|interest rate)\b/i.test(text)) continue;
-      const date = dateIn(text);
+      // the period printed on the row, else the month before its date
+      const printed = periodIn(text);
+      const date = printed ? printed.b : dateIn(text);
+      if (!date) continue;
+      const period = printed || { a: addDays(date, -31), b: addDays(date, -1) };
       const have = stems(text);
       let card = null, best = 0;
-      for (const c of CARDS) if (c.words.every(w => have.has(w)) && c.words.length > best) { card = c; best = c.words.length; }
+      for (const c of CARDS) if (c.words.length && c.words.every(w => have.has(w)) && c.words.length > best) { card = c; best = c.words.length; }
+      card = card || whole;
       // how the bank names the card on this row ("Saving - Main"): the text
       // left once the date and the document's title ("Account Statement") go
       const pageLabel = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -88,9 +103,9 @@
         hits.push({ row, leaf, key: 'page:' + pageLabel + '|' + date, card: (pageLabel || 'Unrecognised card') + ' (new)', account: 'Unsorted', pageLabel, date, label: text.slice(0, 80) });
         continue;
       }
-      // within a few days of an expected date; a card with nothing on file wants every one
-      if (!card.all && !card.statements.some(d => days(d, date) <= 6)) continue;
-      hits.push({ row, leaf, key: card.card + '|' + date, card: card.card, account: card.card, pageLabel, date, label: text.slice(0, 80) });
+      // fetched if Banking Aid hasn't this period on file, however old
+      if (onFile(card, period)) continue;
+      hits.push({ row, leaf, key: card.card + '|' + date, card: card.card, account: card.card, known: true, pageLabel, date, label: text.slice(0, 80) });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -115,10 +130,23 @@
     CARDS = (res.cards || []).map(c => ({
       card: c.card,
       words: [...new Set(words(c.label || c.card).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))],
-      all: c.gaps.some(g => !g.statements.length),
-      statements: c.gaps.flatMap(g => g.statements)
-    })).filter(c => c.words.length);
+      last4: c.last4 || null,
+      ranges: c.ranges || []
+    })).filter(c => c.words.length || c.last4);
   };
+  // the card a whole page is about: banks that list one account's statements
+  // print its number once at the top ("Joint Account 20-25-28 12345678")
+  const pageCard = () => {
+    const text = (document.body.innerText || '').slice(0, 20000);
+    return CARDS.find(c => c.last4 && new RegExp(String.raw`(?:\d{4}|[…*•x]+\s*|ending\s+)${c.last4}\b`, 'i').test(text)) || null;
+  };
+  // is this statement's period already in Banking Aid? A statement dated D
+  // (no period printed) covers the month before D. Half the period on file
+  // is enough: statement edges differ by a day or two between banks and files.
+  const onFile = (card, period) => card.ranges.some(r => {
+    const overlap = (new Date(r.b < period.b ? r.b : period.b) - new Date(r.a > period.a ? r.a : period.a)) / 86400000;
+    return overlap >= 0.5 * Math.max(1, days(period.a, period.b));
+  });
 
   // ── ticks: what's been sent, kept by the extension across reloads ───────
   let state = {};
@@ -153,7 +181,11 @@
     return src;
   };
   // the viewer's own Download button
-  const downloadButton = () => clickable(document.body, n => /download|save( a)? copy/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '') + ' ' + (n.id || '')));
+  // newer PDF viewers call it "Save" rather than "Download"
+  const downloadButton = () => clickable(document.body, n => {
+    const t = textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '') + ' ' + (n.id || '');
+    return /download|\bsave\b/i.test(t) && !/preference|setting|password|search/i.test(t);
+  });
   const readUrl = async url => { try { const r = await fetch(url, { credentials: 'include' }); return await r.arrayBuffer(); } catch { return null; } };
 
   let caught = null; // set when the background cancels a download for us
@@ -167,8 +199,11 @@
   const getFile = async (h, log) => {
     const got = new Promise(resolve => { caught = resolve; });
     await call({ type: 'arm', ms: 35000 });
-    open(h);
+    // a row with its own Download button (Barclays): press it, no viewer;
+    // otherwise open the statement and take it from there (Santander)
+    const own = clickable(h.row, n => /download/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '')));
     let pressed = false;
+    if (own) { own.scrollIntoView({ block: 'center' }); own.click(); pressed = true; } else open(h);
     const until = Date.now() + 30000;
     try {
       while (Date.now() < until) {
@@ -232,17 +267,46 @@
     return !(n.disabled || n.getAttribute('aria-disabled') === 'true' || /disabled/.test(n.className || ''));
   });
 
+  // every view the page's filter offers: banks list a year (or "last 12
+  // months") at a time, so each year is picked in turn — with "all months"
+  // where there's a month filter — and the page's own Filter button pressed
+  const filterViews = () => {
+    const sels = [];
+    everything(document.body, n => { if (n.nodeType === 1 && n.tagName === 'SELECT' && !inPanel(n)) sels.push(n); });
+    const years = sels.find(s => [...s.options].some(o => /\b(19|20)\d{2}\b|last \d+ months/i.test(o.text)));
+    if (!years) return [null];
+    const months = sels.find(s => s !== years && [...s.options].some(o => /^\s*all/i.test(o.text)));
+    const set = (sel, opt) => { sel.value = opt.value; sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); };
+    return [...years.options].filter(o => !o.disabled && o.value !== '').map(o => async () => {
+      if (months) set(months, [...months.options].find(m => /^\s*all/i.test(m.text)));
+      set(years, o);
+      const go = clickable(document.body, n => /^(filter|search|apply|show|go|update)$/i.test(textOf(n)));
+      if (go) go.click();
+      await sleep(3000);
+      return o.text.trim();
+    });
+  };
+
   const sendAll = async () => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
     let sent = 0, failed = 0, pages = 1, emptyPages = 0;
+    // a recognised card's statement is wanted while Banking Aid hasn't it on
+    // file — tried once per run (one lost in an import restart comes back
+    // next run); a card it can't match yet goes by this browser's ticks
+    const tried = new Set();
+    const wanted = x => x.known ? !tried.has(x.key) : !state[x.key];
+    for (const view of filterViews()) {
+    if (stop) break;
+    if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); emptyPages = 0; }
     pageLoop: while (!stop) {
       // one at a time, finding the row afresh each time: going back from a
       // statement re-draws the list, and an old row no longer opens anything
       for (;;) {
         if (stop) break pageLoop;
         hits = findHits(); render();
-        const h = hits.find(x => !state[x.key]);
+        const h = hits.find(wanted);
         if (!h) break;
+        tried.add(h.key);
         say('Getting ' + h.card + ' ' + h.date + '…');
         self.dlog && dlog('getting', h.key, location.href);
         const where = location.href;
@@ -265,8 +329,9 @@
       next.scrollIntoView({ block: 'center' }); next.click(); pages++;
       await sleep(2500);
       // older pages can hold nothing missing for a while; a long run of them stops the walk
-      emptyPages = findHits().some(x => !state[x.key]) ? 0 : emptyPages + 1;
+      emptyPages = findHits().some(wanted) ? 0 : emptyPages + 1;
       if (emptyPages >= 30 || pages >= 200) break;
+    }
     }
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
