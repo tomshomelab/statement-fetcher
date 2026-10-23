@@ -6,7 +6,7 @@
   const where = typeof document === 'undefined' ? 'worker' : location.protocol === 'moz-extension:' ? location.pathname.replace(/^\//, '').replace('.html', '') : 'page';
   const clean = v => {
     if (v instanceof Error) return { error: v.name, message: v.message, stack: String(v.stack || '').split('\n').slice(0, 4).join(' | ') };
-    if (v && typeof v === 'object') { const o = { ...v }; if (o.cfg) o.cfg = { url: o.cfg.url, token: o.cfg.token ? '(set)' : '(none)' }; if ('token' in o) o.token = o.token ? '(set)' : '(none)'; if (o.bytes) o.bytes = `(${o.bytes.byteLength} bytes)`; return o; }
+    if (v && typeof v === 'object') { const o = { ...v }; if (o.cfg) o.cfg = { url: o.cfg.url, token: o.cfg.token ? '(set)' : '(none)' }; if ('token' in o) o.token = o.token ? '(set)' : '(none)'; if (o.bytes) o.bytes = `(${o.bytes.byteLength ?? o.bytes} bytes)`; return o; }
     return v;
   };
   self.dlog = (...args) => {

@@ -78,10 +78,19 @@
       const have = stems(text);
       let card = null, best = 0;
       for (const c of CARDS) if (c.words.every(w => have.has(w)) && c.words.length > best) { card = c; best = c.words.length; }
-      if (!card) continue;
+      // how the bank names the card on this row ("Saving - Main"): the text
+      // left once the date and the document's title ("Account Statement") go
+      const pageLabel = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      if (!card) {
+        // a card Banking Aid can't match yet: the statement is fetched anyway
+        // and sent unsorted — Banking Aid files it by the account it prints,
+        // learns this wording for that card, and skips it if it's a copy
+        hits.push({ row, leaf, key: 'page:' + pageLabel + '|' + date, card: (pageLabel || 'Unrecognised card') + ' (new)', account: 'Unsorted', pageLabel, date, label: text.slice(0, 80) });
+        continue;
+      }
       // within a few days of an expected date; a card with nothing on file wants every one
       if (!card.all && !card.statements.some(d => days(d, date) <= 6)) continue;
-      hits.push({ row, leaf, key: card.card + '|' + date, card: card.card, date, label: text.slice(0, 80) });
+      hits.push({ row, leaf, key: card.card + '|' + date, card: card.card, account: card.card, pageLabel, date, label: text.slice(0, 80) });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -242,7 +251,7 @@
         if (!file) { state[h.key] = 'failed'; failed++; say('Could not get ' + h.card + ' ' + h.date + ' — open it yourself and drop it on Banking Aid’s Import tab.'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
-          const r = await call({ type: 'upload', cfg, card: h.card, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+          const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
           state[h.key] = r && r.ok ? 'sent' : 'failed';
           r && r.ok ? sent++ : failed++;
           if (!r || !r.ok) say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed'));

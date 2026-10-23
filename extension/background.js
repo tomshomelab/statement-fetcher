@@ -31,9 +31,10 @@ async function ba(path, init = {}, cfg = null) {
   return body;
 }
 
-async function upload({ card, name, bytes }, cfg) {
+async function upload({ card, name, bytes, pageLabel }, cfg) {
   const form = new FormData();
   form.append('account', card || 'Unsorted');
+  if (pageLabel) form.append('pageLabel', pageLabel);
   form.append('files', new File([bytes], name.replace(/[^\w .()-]/g, '_'), { type: 'application/pdf' }));
   await ba('/api/import?async=1', { method: 'POST', body: form }, cfg);
   return { ok: true };
@@ -108,7 +109,7 @@ async function handle(msg, sender) {
         bytes = await r.arrayBuffer();
       }
       if (!isPdf(bytes)) return { ok: false, error: 'not a PDF' };
-      try { return await upload({ card: msg.card, name: msg.name, bytes }, msg.cfg); }
+      try { return await upload({ card: msg.card, name: msg.name, bytes, pageLabel: msg.pageLabel }, msg.cfg); }
       catch (e) { return { ok: false, error: e.message }; }
     }
     case 'test': {
