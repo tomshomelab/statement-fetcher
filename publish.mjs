@@ -59,7 +59,9 @@ console.log(`Version ${version}`);
 run('npx --yes web-ext lint --source-dir extension --self-hosted');
 const signedDir = path.join(root, 'dist', 'signed');
 mkdirSync(signedDir, { recursive: true });
-run(`npx --yes web-ext sign --source-dir extension --artifacts-dir "${signedDir}" --channel unlisted --api-key "${keys.issuer}" --api-secret "${keys.secret}"`);
+// keys go in through the environment, never the command line: a failed
+// command's error message prints its whole command line
+run(`npx --yes web-ext sign --source-dir extension --artifacts-dir "${signedDir}" --channel unlisted`, { env: { ...process.env, WEB_EXT_API_KEY: keys.issuer, WEB_EXT_API_SECRET: keys.secret } });
 
 // 3. the freshly signed xpi
 const xpi = readdirSync(signedDir).filter((f) => f.endsWith('.xpi') && f.includes(version))
