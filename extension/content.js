@@ -235,8 +235,10 @@
         const h = hits.find(x => !state[x.key]);
         if (!h) break;
         say('Getting ' + h.card + ' ' + h.date + '…');
+        self.dlog && dlog('getting', h.key, location.href);
         const where = location.href;
         const file = await getFile(h, say);
+        self.dlog && dlog('file', h.key, file ? { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null } : 'NONE');
         if (!file) { state[h.key] = 'failed'; failed++; say('Could not get ' + h.card + ' ' + h.date + ' — open it yourself and drop it on Banking Aid’s Import tab.'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
@@ -290,7 +292,7 @@
     sendBtn.onclick = sendAll;
     reset.onclick = () => { state = {}; save(); hits = findHits(); render(); };
     try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
-    catch (e) { status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
+    catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     hits = findHits(); render();
   };
   const toggle = () => {

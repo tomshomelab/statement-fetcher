@@ -31,6 +31,7 @@ if ($('show')) $('show').onclick = async () => {
   try {
     // already on the page (remembered site) or put there now
     await browser.tabs.sendMessage(tab.id, { type: 'toggle' }).catch(async () => {
+      await browser.tabs.executeScript(tab.id, { file: 'log.js' });
       await browser.tabs.executeScript(tab.id, { file: 'content.js' });
       await browser.tabs.sendMessage(tab.id, { type: 'toggle' });
     });
@@ -50,7 +51,19 @@ $('save').onclick = async () => {
   current = { ...current, url, token: $('token').value.trim() };
   await browser.storage.local.set({ url: current.url, token: current.token });
   if (!await asking) { msg('Firefox needs your OK to reach Banking Aid: press Save & test again and choose Allow.'); return; }
-  msg('Testing…');
-  const r = await browser.runtime.sendMessage({ type: 'test', cfg: { url: current.url, token: current.token } }).catch(e => ({ ok: false, error: 'the add-on’s background didn’t answer (' + e.message + ')' }));
-  msg(r.ok ? `✓ Connected: ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.` : `✕ ${r.error}`);
+  // each step on its own, so a failure says exactly where it is
+  const step = async (name, fn) => { try { return await fn(); } catch (e) { throw new Error(`${name}: ${e && e.message ? e.message : e}`); } };
+  try {
+    msg('Testing 1/3: the add-on’s background…');
+    const pong = await step('1 · reaching the add-on’s background', () => browser.runtime.sendMessage({ type: 'ping' }));
+    if (!pong || !pong.pong) throw new Error('1 · the add-on’s background gave no answer');
+    msg('Testing 2/3: Banking Aid from here…');
+    const r1 = await step('2 · reaching Banking Aid from the menu', () => fetch(current.url + '/api/statements/gaps', { headers: current.token ? { authorization: 'Bearer ' + current.token } : {}, credentials: 'include' }));
+    if (r1.status === 401) throw new Error('Banking Aid didn’t accept the API token: copy it again from Banking Aid → Settings → your sign-in card');
+    if (!r1.ok) throw new Error(`2 · Banking Aid answered ${r1.status}`);
+    msg('Testing 3/3: Banking Aid through the background…');
+    const r = await step('3 · reaching Banking Aid through the background', () => browser.runtime.sendMessage({ type: 'test', cfg: { url: current.url, token: current.token } }));
+    if (!r || !r.ok) throw new Error('3 · ' + ((r && r.error) || 'no answer'));
+    msg(`✓ Connected (v${pong.version}): ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.`);
+  } catch (e) { dlog('save & test failed', e); msg('✕ ' + e.message); }
 };

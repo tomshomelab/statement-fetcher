@@ -52,7 +52,7 @@ async function registerSites() {
     const { sites } = await settings();
     const allowed = [];
     for (const s of sites) if (await browser.permissions.contains({ origins: patternsFor([s]) }).catch(() => false)) allowed.push(s);
-    if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'content.js' }], runAt: 'document_idle' });
+    if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'log.js' }, { file: 'content.js' }], runAt: 'document_idle' });
   } catch (e) { console.warn('statement fetcher: could not register sites', e); }
 }
 registerSites();
@@ -74,8 +74,16 @@ browser.downloads.onCreated.addListener(async item => {
   browser.tabs.sendMessage(tabId, { type: 'download-caught', url: item.url });
 });
 
-browser.runtime.onMessage.addListener(async (msg, sender) => {
+// every message logged with how it ended (debug receiver, if running)
+browser.runtime.onMessage.addListener((msg, sender) => {
+  dlog('message in', msg, sender.tab ? 'from tab ' + sender.tab.id : 'from ' + (sender.url || '').split('/').pop());
+  return handle(msg, sender).then(
+    r => { dlog('message out', msg.type, r && typeof r === 'object' ? { ok: r.ok, error: r.error, keys: Object.keys(r) } : r); return r; },
+    e => { dlog('message FAILED', msg.type, e); return Promise.reject(e); });
+});
+async function handle(msg, sender) {
   switch (msg.type) {
+    case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
     case 'arm': armed = { tabId: sender.tab.id, until: Date.now() + (msg.ms || 30000) }; return { ok: true };
     case 'disarm': if (armed && armed.tabId === sender.tab.id) armed = null; return { ok: true };
@@ -95,4 +103,4 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
       catch (e) { return { ok: false, error: e.message + (e.stack ? ' [at ' + String(e.stack).split('\n')[0].slice(0, 80) + ']' : '') }; }
     }
   }
-});
+}

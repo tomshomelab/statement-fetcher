@@ -18,6 +18,7 @@
   ],
   "background": {
     "scripts": [
+      "log.js",
       "background.js"
     ],
     "persistent": true
