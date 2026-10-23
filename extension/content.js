@@ -199,8 +199,8 @@
   const getFile = async (h, log) => {
     const got = new Promise(resolve => { caught = resolve; });
     await call({ type: 'arm', ms: 35000 });
-    // a row with its own Download button (Barclays): press it, no viewer;
-    // otherwise open the statement and take it from there (Santander)
+    // a row with its own Download button (some banks list them so): press it, no viewer;
+    // otherwise open the statement and take it from there (others show it in a viewer)
     const own = clickable(h.row, n => /download/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '')));
     let pressed = false;
     if (own) { own.scrollIntoView({ block: 'center' }); own.click(); pressed = true; } else open(h);
