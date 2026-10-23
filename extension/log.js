@@ -12,6 +12,9 @@
   self.dlog = (...args) => {
     let line;
     try { line = JSON.stringify({ v: browser.runtime.getManifest().version, where, args: args.map(clean) }); } catch (e) { line = JSON.stringify({ where, args: args.map(String) }); }
+    // a bank page may not reach a local http address itself: its lines go
+    // through the add-on's background
+    if (where === 'page' && self.call) { self.call({ type: 'log', line }, 5000).catch(() => {}); return; }
     fetch('http://127.0.0.1:8777/log', { method: 'POST', body: line }).catch(() => {});
   };
   self.addEventListener('error', e => self.dlog('uncaught', e.message, e.filename + ':' + e.lineno));

@@ -87,16 +87,17 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 browser.runtime.onConnect.addListener(port => {
   if (port.name !== 'rpc') return;
   port.onMessage.addListener(async ({ id, msg }) => {
-    dlog('rpc in', msg);
+    if (msg.type !== 'log') dlog('rpc in', msg);
     try {
       const r = await handle(msg, port.sender);
-      dlog('rpc out', msg.type, r && typeof r === 'object' ? { ok: r.ok, error: r.error, keys: Object.keys(r) } : r);
+      if (msg.type !== 'log') dlog('rpc out', msg.type, r && typeof r === 'object' ? { ok: r.ok, error: r.error, keys: Object.keys(r) } : r);
       port.postMessage({ id, r });
     } catch (e) { dlog('rpc FAILED', msg.type, e); port.postMessage({ id, error: e.message }); }
   });
 });
 async function handle(msg, sender) {
   switch (msg.type) {
+    case 'log': fetch('http://127.0.0.1:8777/log', { method: 'POST', body: msg.line }).catch(() => {}); return { ok: true };
     case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
     case 'arm': armed = { tabId: sender.tab.id, until: Date.now() + (msg.ms || 30000) }; return { ok: true };

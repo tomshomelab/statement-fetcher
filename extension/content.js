@@ -1,6 +1,6 @@
 // Runs on the bank's pages. Opened from the toolbar button: lists the
-// statements Banking Aid is missing that this page shows, and "Send all"
-// opens each one, takes the file (from the viewer, or by pressing the page's
+// statements Banking Aid is missing that this page shows, and "Fetch
+// missing statements" opens each one, takes the file (from the viewer, or by pressing the page's
 // own Download button, which the extension catches), sends it to Banking Aid,
 // goes back and carries on through the pages.
 (() => {
@@ -196,21 +196,22 @@
   // open the statement, then take the file however it shows up: a download
   // the extension catches, a PDF frame on the page, or — after a moment —
   // pressing the viewer's Download button so it becomes a caught download
-  const getFile = async (h, log) => {
+  const getFile = async (h, log, ms = 30000) => {
     const got = new Promise(resolve => { caught = resolve; });
-    await call({ type: 'arm', ms: 35000 });
+    await call({ type: 'arm', ms: ms + 5000 });
+    let why = 'no file appeared within ' + Math.round(ms / 1000) + 's';
     // a row with its own Download button (some banks list them so): press it, no viewer;
     // otherwise open the statement and take it from there (others show it in a viewer)
     const own = clickable(h.row, n => /download/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '')));
     let pressed = false;
     if (own) { own.scrollIntoView({ block: 'center' }); own.click(); pressed = true; } else open(h);
-    const until = Date.now() + 30000;
+    const until = Date.now() + ms;
     try {
       while (Date.now() < until) {
         const dl = await Promise.race([got, sleep(800).then(() => null)]);
         if (dl) {
           // a blob: link is the page's own; anything else the extension fetches
-          if (dl.url.startsWith('blob:') || dl.url.startsWith('data:')) { const b = await readUrl(dl.url); if (isPdf(b)) return { bytes: b, how: 'download button' }; }
+          if (dl.url.startsWith('blob:') || dl.url.startsWith('data:')) { const b = await readUrl(dl.url); if (isPdf(b)) return { bytes: b, how: 'download button' }; why = 'the bank’s download wasn’t a PDF'; }
           else return { url: dl.url, how: 'download' };
         }
         const src = shownPdf();
@@ -218,12 +219,12 @@
           if (/^blob:|^data:/.test(src)) { const b = await readUrl(src); if (isPdf(b)) return { bytes: b, how: 'viewer' }; }
           else { const b = await readUrl(src); if (isPdf(b)) return { bytes: b, how: 'viewer' }; }
         }
-        if (!pressed && Date.now() > until - 26000) {
+        if (!pressed && Date.now() > until - ms + 4000) {
           const btn = downloadButton();
           if (btn) { pressed = true; log('Pressing the page’s Download button…'); btn.click(); }
         }
       }
-      return null;
+      return { why };
     } finally {
       caught = null;
       call({ type: 'disarm' });
@@ -245,16 +246,17 @@
       const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333;cursor:pointer');
       const box = make('input'); box.type = 'checkbox'; box.checked = st === 'sent' || st === 'got';
       const name = make('span', box.checked ? 'text-decoration:line-through;color:#888' : st === 'failed' ? 'color:#ff8a8a' : '',
-        h.date.split('-').reverse().join('/') + ' - ' + h.label + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (could not get it)' : ''));
+        h.date.split('-').reverse().join('/') + ' - ' + h.label + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
       box.onchange = () => { state[h.key] = box.checked ? 'got' : ''; save(); render(); };
       name.onclick = ev => { ev.preventDefault(); open(h); };
       line.appendChild(box); line.appendChild(name);
       list.appendChild(line);
     }
     const left = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got').length;
+    sendBtn.textContent = left ? 'Fetch ' + left + ' missing statement' + (left === 1 ? '' : 's') + ' (then older pages)' : 'Fetch missing statements';
     status.textContent = !hits.length
-      ? 'No missing statement on this page. Press Send all to go through every page.'
-      : left ? left + ' missing on this page. Send all fetches them into Banking Aid and moves through the pages.' : 'All on this page done.';
+      ? 'Nothing missing on this page. The button still walks the older pages and years for months Banking Aid hasn’t got.'
+      : left ? left + ' statement' + (left === 1 ? '' : 's') + ' here for months Banking Aid hasn’t got. Statements it already has are left alone.' : 'All on this page done.';
     if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
   };
   // the list again, after the page re-drew it (going back from a viewer)
@@ -290,11 +292,19 @@
   const sendAll = async () => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
     let sent = 0, failed = 0, pages = 1, emptyPages = 0;
+    // what Banking Aid holds right now: a statement imported since the panel
+    // opened is on file, not missing
+    say('Asking Banking Aid what it already has…');
+    try { await loadCards(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
+    let sinceRefresh = 0;
     // a recognised card's statement is wanted while Banking Aid hasn't it on
     // file — tried once per run (one lost in an import restart comes back
     // next run); a card it can't match yet goes by this browser's ticks
     const tried = new Set();
-    const wanted = x => x.known ? !tried.has(x.key) : !state[x.key];
+    // …and one sent in the last 12 hours is still in Banking Aid's import
+    // queue, not missing: fetching it again only made copies
+    const recentlySent = x => state[x.key + '@'] && Date.now() - state[x.key + '@'] < 12 * 3600000;
+    const wanted = x => x.known ? !tried.has(x.key) && !recentlySent(x) : !state[x.key];
     for (const view of filterViews()) {
     if (stop) break;
     if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); emptyPages = 0; }
@@ -310,18 +320,29 @@
         say('Getting ' + h.card + ' ' + h.date + '…');
         self.dlog && dlog('getting', h.key, location.href);
         const where = location.href;
-        const file = await getFile(h, say);
-        self.dlog && dlog('file', h.key, file ? { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null } : 'NONE');
-        if (!file) { state[h.key] = 'failed'; failed++; say('Could not get ' + h.card + ' ' + h.date + ' — open it yourself and drop it on Banking Aid’s Import tab.'); }
+        let file = await getFile(h, say);
+        // one more go with longer to wait: big or old statements can take a
+        // while to build on the bank's side
+        if (file.why && !stop) {
+          self.dlog && dlog('retrying', h.key, file.why);
+          if (location.href !== where) { history.back(); await waitForList(); }
+          const again = findHits().find(x => x.key === h.key);
+          if (again) { say('Trying ' + h.card + ' ' + h.date + ' again, waiting longer…'); file = await getFile(again, say, 60000); }
+        }
+        self.dlog && dlog('file', h.key, file.why ? { why: file.why } : { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null });
+        if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
           const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
           state[h.key] = r && r.ok ? 'sent' : 'failed';
+          if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; } else state[h.key + '!'] = 'Banking Aid: ' + ((r && r.error) || 'upload failed');
           r && r.ok ? sent++ : failed++;
           if (!r || !r.ok) say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed'));
         }
         await save();
         if (location.href !== where) { history.back(); await waitForList(); }
+        // statements sent a while ago have imported by now: take the fresh list
+        if (++sinceRefresh >= 20) { sinceRefresh = 0; try { await loadCards(); } catch { /* keep the old list */ } }
         await sleep(500);
       }
       const next = nextControl();
@@ -335,7 +356,12 @@
     }
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
-    say('Done: ' + sent + ' sent to Banking Aid' + (failed ? ', ' + failed + ' to get yourself (marked red)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background.');
+    say('Done: ' + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background — ');
+    // where they went: Banking Aid's Import page lists them card by card
+    const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
+    see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
+    see.target = '_blank';
+    log.appendChild(see);
   };
 
   const build = async () => {
@@ -352,11 +378,12 @@
     panel.appendChild(status);
     const btnCss = 'background:#2b6fd6;color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:600';
     const bar = make('div', 'display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px');
-    sendBtn = make('button', btnCss, 'Send all to Banking Aid');
+    sendBtn = make('button', btnCss, 'Fetch missing statements');
+    sendBtn.title = 'Opens each statement Banking Aid hasn’t got, sends it there, and carries on through the older pages and years. Statements already in Banking Aid are skipped.';
     stopBtn = make('button', btnCss.replace('#2b6fd6', '#555'), 'Stop');
     stopBtn.style.display = 'none';
     const reset = make('button', btnCss.replace('#2b6fd6', '#333'), 'Clear ticks');
-    reset.title = 'Forget which statements were sent or ticked, to look again';
+    reset.title = 'Forget which statements were sent, ticked or failed, to try them again';
     bar.appendChild(sendBtn); bar.appendChild(stopBtn); bar.appendChild(reset);
     panel.appendChild(bar);
     list = make('div'); panel.appendChild(list);
