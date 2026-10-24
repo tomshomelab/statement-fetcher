@@ -177,6 +177,17 @@
 
   // ── getting one statement's file ────────────────────────────────────────
   const shown = n => !!(n.offsetWidth || n.offsetHeight || n.getClientRects().length);
+  // a message on screen saying the bank couldn't make the file
+  const bankRefusal = () => {
+    let hit = null;
+    everything(document.body, n => {
+      if (hit || n.nodeType !== 1 || inPanel(n) || !shown(n)) return;
+      if (!(n.matches('[role=dialog], [role=alertdialog], dialog, [aria-modal=true]') || /modal|dialog|overlay/i.test(n.className || ''))) return;
+      const t = textOf(n);
+      if (/unable to download|error in downloading|couldn.?t (be )?download|can.?t download|not available to download/i.test(t)) hit = { code: (t.match(/\bcode\s*:?\s*(\w{3,10})/i) || [])[1] || null };
+    });
+    return hit;
+  };
   const isPdf = buf => buf && buf.byteLength > 500 && String.fromCharCode(...new Uint8Array(buf.slice(0, 5))) === '%PDF-';
   const clickable = (root, test) => {
     let found = null;
@@ -245,6 +256,15 @@
         if (!pressed && Date.now() > until - ms + 4000) {
           const btn = downloadButton();
           if (btn) { pressed = true; log('Pressing the page’s Download button…'); btn.click(); }
+        }
+        // the bank said it can't produce this one ("Unable to download
+        // statement … quote code 65015"): close its message and move on
+        const refusal = bankRefusal();
+        if (refusal) {
+          const ok = clickable(document.body, n => /^\s*(okay|ok|close|dismiss)\s*$/i.test(textOf(n)) && shown(n));
+          if (ok) ok.click();
+          self.dlog && dlog('bank refused', refusal);
+          return { why: 'the bank couldn’t produce it' + (refusal.code ? ' (code ' + refusal.code + ')' : '') };
         }
         // a Download that opens a menu of formats (PDF / CSV / OFX …): the
         // PDF — it carries the statement's balances, which prove the rows
