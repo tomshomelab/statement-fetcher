@@ -60,6 +60,7 @@
   };
 
   let CARDS = [];
+  let picked = null; // the account chosen on an account picker, while its statements are walked
   let seen = { dated: 0, rows: 0, sample: '' };
   const findHits = () => {
     const rows = new Map(); // row -> its date's element
@@ -95,7 +96,10 @@
       card = card || whole;
       // how the bank names the card on this row ("Saving - Main"): the text
       // left once the date and the document's title ("Account Statement") go
-      const pageLabel = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      // (a row's own buttons aren't its name; on a page reached through an
+      // account picker, the account picked is)
+      const pageLabel = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
+        .replace(/\b(download|view|save|open|pdf)\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || (picked ? picked.name : '');
       if (!card) {
         // a card Banking Aid can't match yet: the statement is fetched anyway
         // and sent unsorted — Banking Aid files it by the account it prints,
@@ -253,8 +257,10 @@
       list.appendChild(line);
     }
     const left = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got').length;
-    sendBtn.textContent = left ? 'Fetch ' + left + ' missing statement' + (left === 1 ? '' : 's') + ' (then older pages)' : 'Fetch missing statements';
-    status.textContent = !hits.length
+    sendBtn.textContent = left ? 'Fetch ' + left + ' missing statement' + (left === 1 ? '' : 's') + ' (then older pages)' : accountChoices().length > 1 ? 'Fetch missing statements for every account' : 'Fetch missing statements';
+    status.textContent = !hits.length && accountChoices().length > 1
+      ? accountChoices().length + ' accounts here. The button opens each in turn and fetches the statements Banking Aid hasn’t got.'
+      : !hits.length
       ? 'Nothing missing on this page. The button still walks the older pages and years for months Banking Aid hasn’t got.'
       : left ? left + ' statement' + (left === 1 ? '' : 's') + ' here for months Banking Aid hasn’t got. Statements it already has are left alone.' : 'All on this page done.';
     if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
@@ -289,7 +295,44 @@
     });
   };
 
-  const sendAll = async () => {
+  // an account picker ("Select which account…"): each choice prints its sort
+  // code and number; banks that list one account's statements at a time
+  // need every account picked in turn
+  const ACCT = /\b\d{2}-\d{2}-\d{2}\s+(\d{8})\b/;
+  const accountChoices = () => {
+    const out = [];
+    everything(document.body, n => {
+      if (n.nodeType !== 1 || inPanel(n) || !n.matches('input[type=radio], [role=radio]')) return;
+      for (let p = n, i = 0; p && i < 8; p = up(p), i++) {
+        const t = textOf(p);
+        if (t.length > 300) break;
+        const m = t.match(ACCT);
+        if (m) { out.push({ el: n, last4: m[1].slice(-4), name: t.replace(ACCT, ' ').replace(/£\s*[\d,.]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) }); break; }
+      }
+    });
+    return out;
+  };
+  const choose = async c => {
+    c.el.scrollIntoView({ block: 'center' });
+    c.el.click();
+    await sleep(400);
+    const go = clickable(document.body, n => /^(select|continue|next|view|view statements|go)$/i.test(textOf(n)) && !n.disabled && n.getAttribute('aria-disabled') !== 'true');
+    if (go) go.click();
+    for (let i = 0; i < 24; i++) { await sleep(500); if (!accountChoices().length || findHits().length || seen.rows > 1) return true; }
+    return false;
+  };
+  // back to the picker: the browser's back, else the page's own way there
+  const backToChoices = async () => {
+    history.back();
+    for (let i = 0; i < 12; i++) { await sleep(500); if (accountChoices().length > 1) return true; }
+    const link = clickable(document.body, n => /change account|switch account|select (an?other |a different )?account|all accounts|choose account/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '')));
+    if (link) { link.click(); for (let i = 0; i < 12; i++) { await sleep(500); if (accountChoices().length > 1) return true; } }
+    return false;
+  };
+  // a run across accounts outlives a full page load: what's done is kept
+  const saveRun = run => browser.storage.local.set({ run });
+
+  const sendAll = async (resume = null) => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
     let sent = 0, failed = 0, pages = 1, emptyPages = 0;
     // what Banking Aid holds right now: a statement imported since the panel
@@ -305,6 +348,7 @@
     // queue, not missing: fetching it again only made copies
     const recentlySent = x => state[x.key + '@'] && Date.now() - state[x.key + '@'] < 12 * 3600000;
     const wanted = x => x.known ? !tried.has(x.key) && !recentlySent(x) : !state[x.key];
+    const walk = async () => {
     for (const view of filterViews()) {
     if (stop) break;
     if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); emptyPages = 0; }
@@ -354,6 +398,29 @@
       if (emptyPages >= 30 || pages >= 200) break;
     }
     }
+    };
+    // an account picker: every account in turn, the ones done kept so a
+    // page reload carries on where it was
+    let choices = accountChoices();
+    if (choices.length > 1 && !findHits().length) {
+      const run = resume || { at: Date.now(), done: [] };
+      for (;;) {
+        if (stop) break;
+        choices = accountChoices();
+        const c = choices.find(x => !run.done.includes(x.last4));
+        if (!c) break;
+        run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
+        picked = c;
+        say('Opening ' + (c.name || 'account') + ' …' + c.last4 + '…');
+        self.dlog && dlog('account', c.last4);
+        emptyPages = 0;
+        if (await choose(c)) await walk();
+        if (stop) break;
+        if (!await backToChoices()) { say('Couldn’t get back to the account list: open it again and press the button, it carries on with the next account.'); break; }
+      }
+      if (!stop && !accountChoices().some(x => !run.done.includes(x.last4))) await saveRun(null);
+    } else await walk();
+    if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
     say('Done: ' + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background — ');
@@ -390,12 +457,27 @@
     log = make('div', 'color:#888;font-size:12px;margin-top:8px'); panel.appendChild(log);
     document.body.appendChild(panel);
     stopBtn.onclick = () => { stop = true; say('Stopping after this one…'); };
-    sendBtn.onclick = sendAll;
+    sendBtn.onclick = async () => {
+      const { run } = await browser.storage.local.get('run');
+      sendAll(run && Date.now() - run.at < 30 * 60000 ? run : null);
+    };
     reset.onclick = () => { state = {}; save(); hits = findHits(); render(); };
     try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     hits = findHits(); render();
   };
+  // a run over a bank's accounts that a page load interrupted: open the panel
+  // and carry on with the accounts not yet done
+  (async () => {
+    try {
+      const { run } = await browser.storage.local.get('run');
+      if (!run || Date.now() - run.at > 30 * 60000) return;
+      await sleep(2000);
+      if (panel || accountChoices().length < 2) return;
+      await build();
+      sendAll(run);
+    } catch { /* nothing to resume */ }
+  })();
   const toggle = () => {
     if (panel) { stop = true; for (const h of hits) h.row.style.outline = ''; panel.remove(); panel = null; return; }
     build();
