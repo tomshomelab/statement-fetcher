@@ -105,7 +105,9 @@
       // account picker, the account picked is)
       const cleaned = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
         .replace(/\b(download|view|save|open|pdf)\b/gi, ' ').replace(/[^\p{L}\p{N}&'’ .()-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-      const pageLabel = /\p{L}{2}/u.test(cleaned) ? cleaned : (picked ? picked.name : pageAccountName());
+      // a page about one account (its header prints sort code + number) is
+      // named by that account — row text there carries screen-reader words
+      const pageLabel = (picked && picked.name) || pageAccountName() || (/\p{L}{2}/u.test(cleaned) ? cleaned : '');
       if (!card) {
         // a card Banking Aid can't match yet: the statement is fetched anyway
         // and sent unsorted — Banking Aid files it by the account it prints,
@@ -147,7 +149,11 @@
   // the account a statements page is about, as its header names it: the words
   // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
   const pageAccountName = () => {
-    const m = (document.body.innerText || '').slice(0, 20000).match(/([^\n]{2,60}?)\s*\n?\s*\b\d{2}-\d{2}-\d{2}\s+\d{8}\b/);
+    const text = (document.body.innerText || '').slice(0, 20000);
+    // only a page about ONE account: one that lists several names none
+    const numbers = new Set((text.match(/\b\d{2}-\d{2}-\d{2}\s+\d{8}\b/g) || []).map(x => x.replace(/\s+/g, ' ')));
+    if (numbers.size !== 1) return '';
+    const m = text.match(/([^\n]{2,60}?)\s*\n?\s*\b\d{2}-\d{2}-\d{2}\s+\d{8}\b/);
     return m ? m[1].replace(/^(your statements|statements)\s*/i, '').trim() : '';
   };
   // the card a whole page is about: banks that list one account's statements
@@ -170,6 +176,7 @@
   const save = () => browser.storage.local.set({ got: state });
 
   // ── getting one statement's file ────────────────────────────────────────
+  const shown = n => !!(n.offsetWidth || n.offsetHeight || n.getClientRects().length);
   const isPdf = buf => buf && buf.byteLength > 500 && String.fromCharCode(...new Uint8Array(buf.slice(0, 5))) === '%PDF-';
   const clickable = (root, test) => {
     let found = null;
@@ -219,7 +226,7 @@
     // a row with its own Download button (some banks list them so): press it, no viewer;
     // otherwise open the statement and take it from there (others show it in a viewer)
     const own = clickable(h.row, n => /download/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '')));
-    let pressed = false;
+    let pressed = false, formatPicked = false;
     if (own) { own.scrollIntoView({ block: 'center' }); own.click(); pressed = true; } else open(h);
     const until = Date.now() + ms;
     try {
@@ -239,8 +246,14 @@
           const btn = downloadButton();
           if (btn) { pressed = true; log('Pressing the page’s Download button…'); btn.click(); }
         }
+        // a Download that opens a menu of formats (PDF / CSV / OFX …): the
+        // PDF — it carries the statement's balances, which prove the rows
+        if (pressed && !formatPicked) {
+          const pdfOpt = clickable(document.body, n => /^\s*pdf\b/i.test(textOf(n)) && shown(n));
+          if (pdfOpt) { formatPicked = true; self.dlog && dlog('picked format', textOf(pdfOpt).slice(0, 40)); pdfOpt.click(); }
+        }
       }
-      return { why };
+      return { why: formatPicked ? why + ' after choosing PDF' : why };
     } finally {
       caught = null;
       call({ type: 'disarm' });

@@ -3,11 +3,6 @@
     "statement-fetcher@tomshomelab.github.io": {
       "updates": [
         {
-          "version": "1.0.11",
-          "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.11.xpi",
-          "update_hash": "sha256:24e22871a468700d43306c5d84620656018007af32804767564627104b25a2cf"
-        },
-        {
           "version": "1.0.12",
           "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.12.xpi",
           "update_hash": "sha256:61b4311b7d101235190fcaeb7b0574d6842244bdfd603427f64011624185062a"
@@ -26,6 +21,11 @@
           "version": "1.0.15",
           "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.15.xpi",
           "update_hash": "sha256:7794e91911fca81fdcc02507c3a44688fe1134d6a1d86441a00595aae64db1d5"
+        },
+        {
+          "version": "1.0.16",
+          "update_link": "https://raw.githubusercontent.com/tomshomelab/statement-fetcher/main/releases/statement_fetcher-1.0.16.xpi",
+          "update_hash": "sha256:07a34580eeff0a91e2daf6631c699bbbee2d4b3cba16c0a8e9b7a90ad9f8cd86"
         }
       ]
     }
