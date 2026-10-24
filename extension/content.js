@@ -218,7 +218,7 @@
     if (own) { own.scrollIntoView({ block: 'center' }); own.click(); pressed = true; } else open(h);
     const until = Date.now() + ms;
     try {
-      while (Date.now() < until) {
+      while (Date.now() < until && !stop) {
         const dl = await Promise.race([got, sleep(800).then(() => null)]);
         if (dl) {
           // a blob: link is the page's own; anything else the extension fetches
@@ -389,6 +389,7 @@
           if (again) { say('Trying ' + h.card + ' ' + h.date + ' again, waiting longer…'); file = await getFile(again, say, 60000); }
         }
         self.dlog && dlog('file', h.key, file.why ? { why: file.why } : { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null });
+        if (stop) break pageLoop;
         if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
@@ -438,7 +439,7 @@
     if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
-    say('Done: ' + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background — ');
+    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background — ');
     // where they went: Banking Aid's Import page lists them card by card
     const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
     see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
@@ -471,7 +472,16 @@
     list = make('div'); panel.appendChild(list);
     log = make('div', 'color:#888;font-size:12px;margin-top:8px'); panel.appendChild(log);
     document.body.appendChild(panel);
-    stopBtn.onclick = () => { stop = true; say('Stopping after this one…'); };
+    // Stop means now: the wait for a file ends, the run's leftovers go, and
+    // the button comes back — whatever the run was doing
+    stopBtn.onclick = () => {
+      stop = true;
+      if (caught) caught(null);
+      call({ type: 'disarm' }).catch(() => {});
+      saveRun(null);
+      stopBtn.style.display = 'none'; sendBtn.style.display = '';
+      say('Stopped.');
+    };
     sendBtn.onclick = async () => {
       const { run } = await browser.storage.local.get('run');
       sendAll(run && Date.now() - run.at < 30 * 60000 ? run : null);
