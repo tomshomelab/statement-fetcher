@@ -10,9 +10,14 @@
   // ── reading the page ────────────────────────────────────────────────────
   const MN = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   const pad = n => String(n).padStart(2, '0');
-  const iso = (y, m, d) => (y < 100 ? 2000 + y : y) + '-' + pad(m) + '-' + pad(d);
+  // a real calendar date or nothing: a sort code (20-46-07) isn't the 20th of month 46
+  const iso = (y, m, d) => {
+    const yy = y < 100 ? 2000 + y : y;
+    return m >= 1 && m <= 12 && new Date(Date.UTC(yy, m - 1, d)).getUTCDate() === d ? yy + '-' + pad(m) + '-' + pad(d) : null;
+  };
   // dates as banks print them: 08/10/2026, 8/10/26, 05 Sep 26, 5th September 2026
-  const D_NUM = String.raw`\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b`;
+  // — but not a sort code, which an account number follows ("20-46-07 12345678")
+  const D_NUM = String.raw`\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b(?!\s*\d{6,})`;
   const D_TXT = String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(?:\d{4}|\d{2})\b`;
   const DATE = new RegExp(`${D_NUM}|${D_TXT}`, 'gi');
   // a statement's period, "05 Sep 26 - 06 Oct 26", is one date for row-finding
@@ -23,8 +28,8 @@
     r = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4}|\d{2})/i);
     return r ? iso(+r[3], MN[r[2].slice(0, 3).toLowerCase()], +r[1]) : null;
   };
-  const dateIn = t => { const m = String(t).match(DATE); return m ? parseDate(m[0]) : null; };
-  const periodIn = t => { const r = new RegExp(RANGE.source, 'i').exec(t); return r ? { a: parseDate(r[1]), b: parseDate(r[2]) } : null; };
+  const dateIn = t => { for (const m of String(t).match(DATE) || []) { const d = parseDate(m); if (d) return d; } return null; };
+  const periodIn = t => { const r = new RegExp(RANGE.source, 'i').exec(t); const p = r && { a: parseDate(r[1]), b: parseDate(r[2]) }; return p && p.a && p.b ? p : null; };
   const dateUnits = t => { const ranges = (t.match(RANGE) || []).length; return ranges + (t.replace(RANGE, ' ').match(DATE) || []).length; };
   const days = (a, b) => Math.abs(new Date(a) - new Date(b)) / 86400000;
   const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
@@ -325,8 +330,16 @@
     await sleep(400);
     const go = clickable(document.body, n => /^(select|continue|next|view|view statements|go)$/i.test(textOf(n)) && !n.disabled && n.getAttribute('aria-disabled') !== 'true');
     if (go) go.click();
-    for (let i = 0; i < 24; i++) { await sleep(500); if (!accountChoices().length || findHits().length || seen.rows > 1) return true; }
-    return false;
+    // the picker goes first and the statements arrive a moment later: wait
+    // for rows (or the page's year filter), not just for the picker to go
+    for (let i = 0; i < 40 && !stop; i++) {
+      await sleep(500);
+      if (accountChoices().length) continue;
+      findHits();
+      if (seen.rows > 1 || filterViews()[0]) { await sleep(1000); self.dlog && dlog('account page ready', { rows: seen.rows, after: (i + 1) / 2 + 's' }); return true; }
+    }
+    self.dlog && dlog('account page: no statements appeared', { rows: seen.rows, sample: seen.sample });
+    return !accountChoices().length;
   };
   // back to the picker: the browser's back, else the page's own way there
   const backToChoices = async () => {
