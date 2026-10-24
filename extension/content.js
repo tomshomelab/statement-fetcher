@@ -98,8 +98,9 @@
       // left once the date and the document's title ("Account Statement") go
       // (a row's own buttons aren't its name; on a page reached through an
       // account picker, the account picked is)
-      const pageLabel = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
-        .replace(/\b(download|view|save|open|pdf)\b/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || (picked ? picked.name : '');
+      const cleaned = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
+        .replace(/\b(download|view|save|open|pdf)\b/gi, ' ').replace(/[^\p{L}\p{N}&'’ .()-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const pageLabel = /\p{L}{2}/u.test(cleaned) ? cleaned : (picked ? picked.name : pageAccountName());
       if (!card) {
         // a card Banking Aid can't match yet: the statement is fetched anyway
         // and sent unsorted — Banking Aid files it by the account it prints,
@@ -137,6 +138,12 @@
       last4: c.last4 || null,
       ranges: c.ranges || []
     })).filter(c => c.words.length || c.last4);
+  };
+  // the account a statements page is about, as its header names it: the words
+  // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
+  const pageAccountName = () => {
+    const m = (document.body.innerText || '').slice(0, 20000).match(/([^\n]{2,60}?)\s*\n?\s*\b\d{2}-\d{2}-\d{2}\s+\d{8}\b/);
+    return m ? m[1].replace(/^(your statements|statements)\s*/i, '').trim() : '';
   };
   // the card a whole page is about: banks that list one account's statements
   // print its number once at the top ("Joint Account 20-25-28 12345678")
@@ -333,6 +340,14 @@
   const saveRun = run => browser.storage.local.set({ run });
 
   const sendAll = async (resume = null) => {
+    try { await runAll(resume); }
+    catch (e) {
+      self.dlog && dlog('run failed', e);
+      say('Stopped: ' + e.message + '. Press the button to try again.');
+      stopBtn.style.display = 'none'; sendBtn.style.display = '';
+    }
+  };
+  const runAll = async (resume = null) => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
     let sent = 0, failed = 0, pages = 1, emptyPages = 0;
     // what Banking Aid holds right now: a statement imported since the panel
@@ -359,7 +374,7 @@
         if (stop) break pageLoop;
         hits = findHits(); render();
         const h = hits.find(wanted);
-        if (!h) break;
+        if (!h) { self.dlog && dlog('nothing wanted here', { rows: seen.rows, dated: seen.dated, hits: hits.length, known: hits.filter(x => x.known).length, sample: seen.sample }); break; }
         tried.add(h.key);
         say('Getting ' + h.card + ' ' + h.date + '…');
         self.dlog && dlog('getting', h.key, location.href);
@@ -464,7 +479,8 @@
     reset.onclick = () => { state = {}; save(); hits = findHits(); render(); };
     try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
-    hits = findHits(); render();
+    try { hits = findHits(); render(); self.dlog && dlog('page read', { rows: seen.rows, dated: seen.dated, hits: hits.length, sample: seen.sample }); }
+    catch (e) { self.dlog && dlog('reading the page failed', e); status.textContent = 'Couldn’t read this page’s statements (' + e.message + ').'; }
   };
   // a run over a bank's accounts that a page load interrupted: open the panel
   // and carry on with the accounts not yet done
