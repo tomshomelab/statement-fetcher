@@ -31,10 +31,12 @@ async function ba(path, init = {}, cfg = null) {
   return body;
 }
 
-async function upload({ card, name, bytes, pageLabel }, cfg) {
+async function upload({ card, name, bytes, pageLabel, rowLabel }, cfg) {
   const form = new FormData();
   form.append('account', card || 'Unsorted');
   if (pageLabel) form.append('pageLabel', pageLabel);
+  // the row it came from: a row that turns out not to be a statement is skipped next time
+  if (rowLabel) form.append('rowLabel', rowLabel);
   form.append('files', new File([bytes], name.replace(/[^\w .()-]/g, '_'), { type: 'application/pdf' }));
   await ba('/api/import?async=1', { method: 'POST', body: form }, cfg);
   return { ok: true };
@@ -109,6 +111,7 @@ async function handle(msg, sender) {
     case 'log': fetch('http://127.0.0.1:8777/log', { method: 'POST', body: msg.line }).catch(() => {}); return { ok: true };
     case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
+    case 'queue': return ba('/api/import/queue', {}, msg.cfg);
     case 'arm': armed.set(sender.tab.id, { until: Date.now() + (msg.ms || 30000), host: hostOf(sender.tab.url || sender.url), at: Date.now() }); return { ok: true };
     case 'disarm': armed.delete(sender.tab.id); return { ok: true };
     // a statement's file, read by the tab or fetched here from an https link
@@ -119,7 +122,7 @@ async function handle(msg, sender) {
         bytes = await r.arrayBuffer();
       }
       if (!isPdf(bytes)) return { ok: false, error: 'not a PDF' };
-      try { return await upload({ card: msg.card, name: msg.name, bytes, pageLabel: msg.pageLabel }, msg.cfg); }
+      try { return await upload({ card: msg.card, name: msg.name, bytes, pageLabel: msg.pageLabel, rowLabel: msg.rowLabel }, msg.cfg); }
       catch (e) { return { ok: false, error: e.message }; }
     }
     case 'test': {

@@ -99,6 +99,7 @@
     const rowDates = [...rows.keys()].map(r => { const t = textOf(r); const p = periodIn(t); return p ? p.b : dateIn(t); }).filter(Boolean).sort();
     seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '', newest: rowDates[rowDates.length - 1] || null };
     const hits = [];
+    const sameDate = new Map();
     const whole = pageCard();
     for (const [row, leaf] of rows) {
       const text = textOf(row);
@@ -132,7 +133,16 @@
       }
       // fetched if Banking Aid hasn't this period on file, however old
       if (onFile(card, period)) continue;
-      hits.push({ row, leaf, key: card.card + '|' + date, card: card.card, account: card.card, known: true, pageLabel, date, label: text.slice(0, 80) });
+      // two rows on one date (a statement and the yearly statement of fees,
+      // dated alike): told apart by their order, so trying one never counts
+      // as trying the other
+      const base = card.card + '|' + date;
+      const nth = (sameDate.get(base) || 0) + 1;
+      sameDate.set(base, nth);
+      const label = text.slice(0, 80) + (nth > 1 ? ' #' + nth : '');
+      // a row Banking Aid found wasn't a statement (a yearly statement of fees)
+      if ((card.skip || []).some(s => s.date === date && (!s.rowLabel || s.rowLabel === label))) continue;
+      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -159,6 +169,7 @@
       words: [...new Set(words(c.label || c.card).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))],
       last4: c.last4 || null,
       ranges: c.ranges || [],
+      skip: c.skip || [],
       // what Banking Aid is missing for this card: the periods with no statement
       gaps: (c.gaps || []).filter(g => g.from && g.to).map(g => ({ a: g.from, b: g.to }))
     })).filter(c => c.words.length || c.last4);
@@ -490,7 +501,7 @@
         if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
-          const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+          const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
           state[h.key] = r && r.ok ? 'sent' : 'failed';
           if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; } else state[h.key + '!'] = 'Banking Aid: ' + ((r && r.error) || 'upload failed');
           r && r.ok ? sent++ : failed++;
@@ -542,7 +553,26 @@
     if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
-    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + (accountsDone ? accountsDone + ' account' + (accountsDone === 1 ? '' : 's') : pages + ' page' + (pages === 1 ? '' : 's')) + '. They import in the background — ');
+    // where things stand now, from Banking Aid itself: all done, or what the
+    // bank doesn't have to give
+    if (!stop) {
+      // what was just sent is read first: wait for Banking Aid's queue (2 min at most)
+      if (sent) {
+        say('Waiting for Banking Aid to read what was sent…');
+        for (let i = 0; i < 40 && !stop; i++) {
+          await sleep(3000);
+          try { const q = await call({ type: 'queue', cfg }); if (q && !q.active) break; } catch { break; }
+        }
+      }
+      try { await loadCards(); } catch { /* keep the last list */ }
+      hits = findHits(); render();
+      const still = missingSummary();
+      status.textContent = still
+        ? 'Still missing — ' + still + '. ' + (BANK || 'The bank') + ' doesn’t list these as statements, so there’s nothing more to fetch here.'
+        : 'Nothing missing for ' + (BANK || 'this bank') + ' — all done.';
+      if (!still) { sendBtn.textContent = 'Nothing to fetch'; sendBtn.disabled = true; }
+    }
+    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + (accountsDone ? accountsDone + ' account' + (accountsDone === 1 ? '' : 's') : pages + ' page' + (pages === 1 ? '' : 's')) + '. They import in the background — ');
     // where they went: Banking Aid's Import page lists them card by card
     const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
     see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
