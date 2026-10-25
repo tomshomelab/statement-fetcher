@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Banking Aid statement fetcher",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "On your bank's statements page, finds the statements your Banking Aid is missing, downloads each one and sends it straight to Banking Aid.",
   "icons": {
     "48": "icons/icon.svg",
