@@ -111,6 +111,9 @@ async function handle(msg, sender) {
     case 'log': fetch('http://127.0.0.1:8777/log', { method: 'POST', body: msg.line }).catch(() => {}); return { ok: true };
     case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
+    // what Banking Aid wants from this bank, and what the fetcher found
+    case 'plan': return ba('/api/fetch-plan?host=' + encodeURIComponent(msg.host || ''), {}, msg.cfg);
+    case 'report': return ba('/api/fetch-plan/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(msg.report || {}) }, msg.cfg);
     case 'queue': return ba('/api/import/queue', {}, msg.cfg);
     case 'arm': armed.set(sender.tab.id, { until: Date.now() + (msg.ms || 30000), host: hostOf(sender.tab.url || sender.url), at: Date.now() }); return { ok: true };
     case 'disarm': armed.delete(sender.tab.id); return { ok: true };

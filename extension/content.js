@@ -113,7 +113,8 @@
       const text = textOf(row);
       // transaction statements only: not letters, notices, annual summaries or
       // statements of fees (no payments in them to import)
-      if (!/statement/i.test(text) || /\b(annual|fees?|summary|interest rate)\b/i.test(text)) continue;
+      // (a yearly savings statement is a statement: some accounts only get those)
+      if (!/statement/i.test(text) || /\b(fees?|summary|interest rate)\b/i.test(text)) continue;
       // the period printed on the row, else the month before its date
       const printed = periodIn(text);
       const date = printed ? printed.b : dateIn(text);
@@ -121,26 +122,29 @@
       const period = printed || { a: addDays(date, -31), b: addDays(date, -1) };
       const have = stems(text);
       let card = null, best = 0;
-      for (const c of CARDS) for (const ws of (c.wordSets && c.wordSets.length ? c.wordSets : [c.words])) if (ws.length && ws.every(w => have.has(w)) && ws.length > best) { card = c; best = ws.length; }
+      for (const c of CARDS) for (const ws of c.wordSets) if (ws.every(w => have.has(w)) && ws.length > best) { card = c; best = ws.length; }
       card = card || whole;
       // how the bank names the card on this row ("Saving - Main"): the text
       // left once the date and the document's title ("Account Statement") go
       // (a row's own buttons aren't its name; on a page reached through an
       // account picker, the account picked is)
-      const cleaned = text.replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
+      const cleaned = text.replace(RANGE, ' ').replace(DATE, ' ').replace(/^.*?\bstatement\b\s*/i, '').replace(/[›>»]\s*$/, '')
         .replace(/\b(download|view|save|open|pdf)\b/gi, ' ').replace(/[^\p{L}\p{N}&'’ .()-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
       // a page about one account (its header prints sort code + number) is
       // named by that account — row text there carries screen-reader words
       const pageLabel = (picked && picked.name) || pageAccountName() || (/\p{L}{2}/u.test(cleaned) ? cleaned : '');
       if (!card) {
-        // a card Banking Aid can't match yet: the statement is fetched anyway
-        // and sent unsorted — Banking Aid files it by the account it prints,
-        // learns this wording for that card, and skips it if it's a copy
-        hits.push({ row, leaf, key: 'page:' + pageLabel + '|' + date, card: (pageLabel || 'Unrecognised card') + ' (new)', account: 'Unsorted', pageLabel, date, label: text.slice(0, 80) });
+        // an account Banking Aid doesn't have: listed, and sent only when
+        // clicked (Banking Aid files it by the account it prints)
+        hits.push({ row, leaf, key: 'page:' + pageLabel + '|' + date, card: (pageLabel || 'Unrecognised card') + ' (not in Banking Aid)', account: 'Unsorted', pageLabel, date, label: text.slice(0, 80), kind: 'unknown' });
         continue;
       }
-      // fetched if Banking Aid hasn't this period on file, however old
+      // the bank lists this period: whether a wanted gap was offered is told
+      // from these once the account's list has been walked
+      sightings(card).set(period.a + '|' + period.b, period);
       if (onFile(card, period)) continue;
+      // older than the earliest statement Banking Aid has: not wanted
+      if (card.from && period.b < card.from) continue;
       // two rows on one date (a statement and the yearly statement of fees,
       // dated alike): told apart by their order, so trying one never counts
       // as trying the other
@@ -150,10 +154,14 @@
       const label = text.slice(0, 80) + (nth > 1 ? ' #' + nth : '');
       // a row Banking Aid found wasn't a statement (a yearly statement of fees)
       if ((card.skip || []).some(s => s.date === date && (!s.rowLabel || s.rowLabel === label))) continue;
-      // a gap Banking Aid is missing, or older history it has never had (before
-      // its first statement for this card): both are fetched, and said apart
-      const inGap = missingOf(card).some(g => g.a <= period.b && period.a <= g.b);
-      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label, kind: inGap ? 'missing' : 'older' });
+      // wanted: a gap on the plan (one once thought not offered counts, now
+      // it's listed), or newer than anything on file (a quiet account's
+      // statement); anything else between statements on file isn't
+      const overlaps = g => g.a <= period.b && period.a <= g.b;
+      const inGap = [...missingOf(card), ...card.notOffered].some(overlaps);
+      const newer = card.ranges.length && card.ranges.every(r => r.b < period.a);
+      if (!inGap && !newer) continue;
+      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label, kind: inGap ? 'missing' : 'new' });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -163,31 +171,34 @@
   let BANK = null;
   let cfg = null; // Banking Aid address + token, sent with every request
   const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Banking Aid's fetch plan for this bank: its accounts, every name the
+  // bank uses for each, and exactly which statements are wanted. Nothing
+  // else is fetched by a run.
   const loadCards = async () => {
     cfg = await browser.storage.local.get(['url', 'token']);
-    let res = await call({ type: 'gaps', cfg });
-    if (res && res.error) throw new Error(res.error);
-    const host = squash(location.hostname);
-    const mine = (res.cards || []).filter(c => squash(c.bank).length >= 3 && host.includes(squash(c.bank)));
-    BANK = mine.length ? mine[0].bank : null;
-    if (mine.length) res = { ...res, cards: mine };
-    // a card is found by the words of its name or label — not its bank's
-    // name, which the bank's own page doesn't repeat on every line
+    const plan = await call({ type: 'plan', cfg, host: location.hostname });
+    if (plan && plan.error) throw new Error(plan.error);
+    BANK = plan.bank || null;
+    // a card is found by the words of its names — not its bank's name, which
+    // the bank's own page doesn't repeat on every line
     const STOP = ['card', 'account', 'statement', 'the', 'isa', 'and'];
     const words = s => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3);
-    CARDS = (res.cards || []).map(c => ({
+    const bankWords = words(BANK);
+    const period = g => ({ a: g.from, b: g.to });
+    CARDS = (plan.accounts || []).map(c => ({
       card: c.card,
-      words: [...new Set(words(c.label || c.card).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))],
       // every name the bank has used for it ("Everyday Saver", now "Saving - Main")
-      wordSets: [...new Set([c.label, ...(c.labels || []), c.card].filter(Boolean))]
-        .map(l => [...new Set(words(l).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))]).filter(ws => ws.length),
+      wordSets: (c.names || []).map(l => [...new Set(words(l).filter(w => !STOP.includes(w) && !bankWords.includes(w)).map(w => w.slice(0, 5)))]).filter(ws => ws.length),
       last4: c.last4 || null,
-      ranges: c.ranges || [],
-      skip: c.skip || [],
-      // what Banking Aid is missing for this card: the periods with no statement
-      gaps: (c.gaps || []).filter(g => g.from && g.to).map(g => ({ a: g.from, b: g.to }))
-    })).filter(c => c.words.length || c.wordSets.length || c.last4);
+      // the earliest statement on file: nothing older is wanted
+      from: c.from || null,
+      ranges: c.have || [],
+      skip: c.never || [],
+      gaps: (c.want || []).filter(g => g.status === 'wanted').map(period),
+      notOffered: (c.want || []).filter(g => g.status === 'not-offered').map(period)
+    })).filter(c => c.wordSets.length || c.last4);
   };
+  const report = r => call({ type: 'report', cfg, report: r }).catch(() => {});
   // the account a statements page is about, as its header names it: the words
   // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
   const pageAccountName = () => {
@@ -222,6 +233,31 @@
     const out = []; for (let y = Number(g.a.slice(0, 4)); y <= Number(g.b.slice(0, 4)) + 1; y++) out.push(String(y)); return out;
   }));
   const oldestNeeded = card => (card ? missingOf(card) : CARDS.flatMap(missingOf)).map(g => g.a).sort()[0] || null;
+  const notOfferedSummary = () => CARDS.filter(c => c.notOffered.length).map(c => c.card + ': ' + c.notOffered.map(g => monthOf(g.b)).join(', ')).join(' · ');
+  const count = (n, what) => n + ' ' + what + (n === 1 ? '' : 's');
+
+  // ── what the bank offers: told back to Banking Aid ──────────────────────
+  // every statement period the bank's list showed, per account, this run
+  let seenPeriods = new Map();
+  const sightings = card => { if (!seenPeriods.has(card.card)) seenPeriods.set(card.card, new Map()); return seenPeriods.get(card.card); };
+  // a wanted gap the bank's list runs right across (statements before and
+  // after it) without one for the gap: the bank doesn't offer it. A list that
+  // didn't reach that far says nothing.
+  const reportNotOffered = async cards => {
+    let n = 0;
+    for (const c of cards) {
+      const ps = [...(seenPeriods.get(c.card) || new Map()).values()];
+      if (!ps.length) continue;
+      const oldest = ps.map(p => p.a).sort()[0], newest = ps.map(p => p.b).sort().pop();
+      for (const g of missingOf(c)) {
+        if (ps.some(p => p.a <= g.b && g.a <= p.b) || oldest > g.a || newest < g.b) continue;
+        self.dlog && dlog('not offered', c.card, g);
+        await report({ card: c.card, outcome: 'not-offered', from: g.a, to: g.b });
+        n++;
+      }
+    }
+    return n;
+  };
 
   // ── ticks: what's been sent, kept by the extension across reloads ───────
   let state = {};
@@ -348,7 +384,7 @@
       const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333;cursor:pointer');
       const box = make('input'); box.type = 'checkbox'; box.checked = st === 'sent' || st === 'got';
       const name = make('span', box.checked ? 'text-decoration:line-through;color:#888' : st === 'failed' ? 'color:#ff8a8a' : '',
-        h.date.split('-').reverse().join('/') + ' - ' + h.label + (h.kind === 'older' ? '  · older history' : h.kind === 'missing' ? '  · missing' : '') + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
+        h.date.split('-').reverse().join('/') + ' - ' + h.label + (h.kind === 'new' ? '  · new' : '') + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
       box.onchange = () => { state[h.key] = box.checked ? 'got' : ''; save(); render(); };
       // one click: this statement goes to Banking Aid and is ticked off — never
       // the bank's own viewer and download, which leave it on this computer
@@ -358,21 +394,23 @@
       line.appendChild(box); line.appendChild(name);
       list.appendChild(line);
     }
-    const left = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got').length;
-    if (pageBtn) { pageBtn.textContent = 'Fetch these ' + left; pageBtn.style.display = left && stopBtn.style.display === 'none' ? '' : 'none'; }
+    const open = hits.filter(h => h.known && state[h.key] !== 'sent' && state[h.key] !== 'got');
+    if (pageBtn) { pageBtn.textContent = 'Fetch these ' + open.length; pageBtn.style.display = open.length && stopBtn.style.display === 'none' ? '' : 'none'; }
     sendBtn.textContent = 'Fetch all missing';
-    const wanted = missingSummary();
-    status.textContent = !hits.length && !wanted
-      ? 'Nothing missing for ' + (BANK || 'this bank') + ' — Banking Aid has every statement it expects.'
-      : !hits.length
-      ? 'Missing — ' + wanted + '. The button opens only those accounts and years.'
-      : left ? (() => {
-        const open = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got');
-        const gap = open.filter(h => h.kind === 'missing').length, old = open.length - gap;
-        const part = (n, what) => n + ' ' + what + (n === 1 ? '' : 's');
-        return [gap && part(gap, 'missing statement'), old && part(old, 'older statement') + ' Banking Aid hasn’t had yet'].filter(Boolean).join(' + ') + ' here — all will be fetched. Statements it already has are left alone.';
-      })() : 'All on this page done.';
+    status.textContent = statusLine(open.length);
     if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
+  };
+  // where this bank stands, from the plan: what's wanted, and what the bank
+  // was found not to offer
+  const statusLine = here => {
+    if (!BANK) return 'Banking Aid has no accounts at this bank.';
+    const wanted = missingSummary(), none = notOfferedSummary();
+    const n = CARDS.reduce((s, c) => s + missingOf(c).length, 0);
+    return [
+      n ? 'Wanted ' + n + ' — ' + wanted + '.' : 'Nothing missing for ' + BANK + '.',
+      here ? count(here, 'statement') + ' on this page.' : '',
+      none ? 'Not offered by ' + BANK + ' — ' + none + '.' : ''
+    ].filter(Boolean).join(' ');
   };
   // the list again, after the page re-drew it (going back from a viewer)
   const waitForList = async () => {
@@ -458,8 +496,10 @@
       say('Getting ' + h.card + ' ' + h.date + '…');
       const where = location.href;
       const file = await getFile(h, say);
-      if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
-      else {
+      if (file.why) {
+        state[h.key] = 'failed'; state[h.key + '!'] = file.why; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').');
+        if (h.known) report({ card: h.card, outcome: 'download-failed', date: h.date, rowLabel: h.label, detail: file.why });
+      } else {
         const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
         state[h.key] = r && r.ok ? 'sent' : 'failed';
         if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; say('Sent ' + h.card + ' ' + h.date + ' to Banking Aid.'); }
@@ -524,7 +564,9 @@
     // …and one sent in the last 12 hours is still in Banking Aid's import
     // queue, not missing: fetching it again only made copies
     const recentlySent = x => state[x.key + '@'] && Date.now() - state[x.key + '@'] < 12 * 3600000;
-    const wanted = x => x.known ? !tried.has(x.key) && !recentlySent(x) : !state[x.key];
+    const wanted = x => x.known && !tried.has(x.key) && !recentlySent(x);
+    seenPeriods = new Map();
+    let unoffered = 0;
     const walk = async () => {
     const card = picked ? cardFor(picked.last4) : null;
     const years = yearsNeeded(card);
@@ -555,7 +597,10 @@
         }
         self.dlog && dlog('file', h.key, file.why ? { why: file.why } : { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null });
         if (stop) break pageLoop;
-        if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
+        if (file.why) {
+          state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').');
+          report({ card: h.card, outcome: 'download-failed', date: h.date, rowLabel: h.label, detail: file.why });
+        }
         else {
           say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
           const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
@@ -606,10 +651,14 @@
         emptyPages = 0;
         if (await choose(c)) await walk();
         if (stop) break;
+        unoffered += await reportNotOffered([cardFor(c.last4)]);
         if (!await backToChoices()) { say('Couldn’t get back to the account list: open it again and press the button, it carries on with the next account.'); break; }
       }
       if (!stop && !accountChoices().some(x => !run.done.includes(x.last4))) await saveRun(null);
-    } else await walk();
+    } else {
+      await walk();
+      if (!stop) unoffered += await reportNotOffered(CARDS);
+    }
     if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
@@ -626,13 +675,9 @@
       }
       try { await loadCards(); } catch { /* keep the last list */ }
       hits = findHits(); render();
-      const still = missingSummary();
-      status.textContent = still
-        ? 'Still missing — ' + still + '. ' + (BANK || 'The bank') + ' doesn’t list these as statements, so there’s nothing more to fetch here.'
-        : 'Nothing missing for ' + (BANK || 'this bank') + ' — all done.';
-      if (!still) { sendBtn.textContent = 'Nothing to fetch'; sendBtn.disabled = true; }
+      if (!missingSummary()) { sendBtn.textContent = 'Nothing to fetch'; sendBtn.disabled = true; }
     }
-    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + (accountsDone ? accountsDone + ' account' + (accountsDone === 1 ? '' : 's') : pages + ' page' + (pages === 1 ? '' : 's')) + '. They import in the background — ');
+    say((stop ? 'Stopped: ' : 'Done: ') + 'got ' + sent + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + (unoffered ? ', ' + unoffered + ' not offered by ' + (BANK || 'the bank') : '') + ' — ');
     // where they went: Banking Aid's Import page lists them card by card
     const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
     see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
@@ -661,7 +706,7 @@
     pageBtn.style.display = 'none';
     pageBtn.onclick = async () => {
       for (;;) {
-        const h = hits.find(x => state[x.key] !== 'sent' && state[x.key] !== 'got' && state[x.key] !== 'failed');
+        const h = hits.find(x => x.known && state[x.key] !== 'sent' && state[x.key] !== 'got' && state[x.key] !== 'failed');
         if (!h || stop) break;
         await fetchOne(h);
       }
