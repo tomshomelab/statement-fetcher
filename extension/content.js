@@ -66,10 +66,15 @@
   const up = el => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
   const inPanel = el => { for (let n = el; n; n = up(n)) if (n.id === 'ba-fetch-panel') return true; return false; };
   // every node of the page, through shadow roots and same-origin frames
-  const isPdfViewer = d => !!(d && (d.contentType === 'application/pdf' || d.querySelector('#viewerContainer, .pdfViewer, .textLayer, embed[type="application/pdf"]')));
+  const isPdfViewer = d => !!(d && (d.contentType === 'application/pdf' || d.querySelector('#viewerContainer, .pdfViewer, .textLayer, #scaleSelect, embed[type="application/pdf"]')));
   const everything = (root, visit) => {
     if (!root) return;
-    const walk = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    // a PDF viewer built into the page: its printed dates and page arrows are
+    // the statement on screen, not a list of statements — skipped whole
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode: n => n.nodeType === 1 && n.matches && n.matches('#viewerContainer, .pdfViewer, .textLayer, #toolbarContainer, #scaleSelect')
+        ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
     for (let n = walk.currentNode; n; n = walk.nextNode()) {
       visit(n);
       if (n.nodeType === 1) {
@@ -116,7 +121,7 @@
       const period = printed || { a: addDays(date, -31), b: addDays(date, -1) };
       const have = stems(text);
       let card = null, best = 0;
-      for (const c of CARDS) if (c.words.length && c.words.every(w => have.has(w)) && c.words.length > best) { card = c; best = c.words.length; }
+      for (const c of CARDS) for (const ws of (c.wordSets && c.wordSets.length ? c.wordSets : [c.words])) if (ws.length && ws.every(w => have.has(w)) && ws.length > best) { card = c; best = ws.length; }
       card = card || whole;
       // how the bank names the card on this row ("Saving - Main"): the text
       // left once the date and the document's title ("Account Statement") go
@@ -173,12 +178,15 @@
     CARDS = (res.cards || []).map(c => ({
       card: c.card,
       words: [...new Set(words(c.label || c.card).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))],
+      // every name the bank has used for it ("Everyday Saver", now "Saving - Main")
+      wordSets: [...new Set([c.label, ...(c.labels || []), c.card].filter(Boolean))]
+        .map(l => [...new Set(words(l).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))]).filter(ws => ws.length),
       last4: c.last4 || null,
       ranges: c.ranges || [],
       skip: c.skip || [],
       // what Banking Aid is missing for this card: the periods with no statement
       gaps: (c.gaps || []).filter(g => g.from && g.to).map(g => ({ a: g.from, b: g.to }))
-    })).filter(c => c.words.length || c.last4);
+    })).filter(c => c.words.length || c.wordSets.length || c.last4);
   };
   // the account a statements page is about, as its header names it: the words
   // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
@@ -327,7 +335,7 @@
 
   // ── the panel ───────────────────────────────────────────────────────────
   const make = (tag, css, text) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; };
-  let panel = null, list, status, log, sendBtn, stopBtn, hits = [], stop = false;
+  let panel = null, list, status, log, sendBtn, pageBtn, stopBtn, hits = [], stop = false;
   const say = t => { if (log) log.textContent = t; };
   const mark = (h, st) => { h.row.style.outline = st === 'sent' || st === 'got' ? '2px solid #0ca30c' : st === 'failed' ? '2px solid #d03b3b' : '2px solid #e8a33d'; };
   const render = () => {
@@ -342,12 +350,17 @@
       const name = make('span', box.checked ? 'text-decoration:line-through;color:#888' : st === 'failed' ? 'color:#ff8a8a' : '',
         h.date.split('-').reverse().join('/') + ' - ' + h.label + (h.kind === 'older' ? '  · older history' : h.kind === 'missing' ? '  · missing' : '') + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
       box.onchange = () => { state[h.key] = box.checked ? 'got' : ''; save(); render(); };
-      name.onclick = ev => { ev.preventDefault(); open(h); };
+      // one click: this statement goes to Banking Aid and is ticked off — never
+      // the bank's own viewer and download, which leave it on this computer
+      name.title = 'Send this statement to Banking Aid';
+      name.style.cursor = 'pointer';
+      name.onclick = ev => { ev.preventDefault(); fetchOne(h); };
       line.appendChild(box); line.appendChild(name);
       list.appendChild(line);
     }
     const left = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got').length;
-    sendBtn.textContent = left ? 'Fetch ' + left + ' missing statement' + (left === 1 ? '' : 's') + ' (then older pages)' : accountChoices().length > 1 ? 'Fetch missing statements for every account' : 'Fetch missing statements';
+    if (pageBtn) { pageBtn.textContent = 'Fetch these ' + left; pageBtn.style.display = left && stopBtn.style.display === 'none' ? '' : 'none'; }
+    sendBtn.textContent = 'Fetch all missing';
     const wanted = missingSummary();
     status.textContent = !hits.length && !wanted
       ? 'Nothing missing for ' + (BANK || 'this bank') + ' — Banking Aid has every statement it expects.'
@@ -436,6 +449,27 @@
   // a run across accounts outlives a full page load: what's done is kept
   const saveRun = run => browser.storage.local.set({ run });
 
+  // one statement from the list, straight into Banking Aid
+  let busyOne = false;
+  const fetchOne = async h => {
+    if (busyOne) return;
+    busyOne = true; stop = false;
+    try {
+      say('Getting ' + h.card + ' ' + h.date + '…');
+      const where = location.href;
+      const file = await getFile(h, say);
+      if (file.why) { state[h.key] = 'failed'; state[h.key + '!'] = file.why; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').'); }
+      else {
+        const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+        state[h.key] = r && r.ok ? 'sent' : 'failed';
+        if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; say('Sent ' + h.card + ' ' + h.date + ' to Banking Aid.'); }
+        else { state[h.key + '!'] = 'Banking Aid: ' + ((r && r.error) || 'upload failed'); say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed')); }
+      }
+      await save();
+      if (location.href !== where) { history.back(); await waitForList(); }
+      hits = findHits(); render();
+    } finally { busyOne = false; }
+  };
   const sendAll = async (resume = null) => {
     try { await runAll(resume); }
     catch (e) {
@@ -455,7 +489,7 @@
     // is missing: go to the bank's statements page and carry on there — on
     // this page if it's an in-page route, after the load if it reloads
     // a statement open in the bank's PDF viewer: back to the list first (once)
-    const viewerOpen = [...document.querySelectorAll('iframe, embed, object')].some(f => {
+    const viewerOpen = isPdfViewer(document) || [...document.querySelectorAll('iframe, embed, object')].some(f => {
       if (/pdf/i.test(f.getAttribute('type') || '')) return true;
       try { return isPdfViewer(f.contentDocument); } catch { return false; }
     });
@@ -620,13 +654,25 @@
     panel.appendChild(status);
     const btnCss = 'background:#2b6fd6;color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:600';
     const bar = make('div', 'display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px');
-    sendBtn = make('button', btnCss, 'Fetch missing statements');
-    sendBtn.title = 'Opens each statement Banking Aid hasn’t got, sends it there, and carries on through the older pages and years. Statements already in Banking Aid are skipped.';
+    // two jobs, two buttons: just the statements listed here, or everything
+    // missing (every account, year and page with a gap)
+    pageBtn = make('button', btnCss, 'Fetch these');
+    pageBtn.title = 'Sends only the statements listed below to Banking Aid';
+    pageBtn.style.display = 'none';
+    pageBtn.onclick = async () => {
+      for (;;) {
+        const h = hits.find(x => state[x.key] !== 'sent' && state[x.key] !== 'got' && state[x.key] !== 'failed');
+        if (!h || stop) break;
+        await fetchOne(h);
+      }
+    };
+    sendBtn = make('button', btnCss, 'Fetch all missing');
+    sendBtn.title = 'Goes through every account, year and page with something missing and sends each statement Banking Aid hasn’t got. Statements already in Banking Aid are skipped.';
     stopBtn = make('button', btnCss.replace('#2b6fd6', '#555'), 'Stop');
     stopBtn.style.display = 'none';
     const reset = make('button', btnCss.replace('#2b6fd6', '#333'), 'Clear ticks');
     reset.title = 'Forget which statements were sent, ticked or failed, to try them again';
-    bar.appendChild(sendBtn); bar.appendChild(stopBtn); bar.appendChild(reset);
+    bar.appendChild(pageBtn); bar.appendChild(sendBtn); bar.appendChild(stopBtn); bar.appendChild(reset);
     panel.appendChild(bar);
     list = make('div'); panel.appendChild(list);
     log = make('div', 'color:#888;font-size:12px;margin-top:8px'); panel.appendChild(log);
