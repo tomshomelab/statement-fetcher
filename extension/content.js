@@ -66,6 +66,7 @@
   const up = el => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
   const inPanel = el => { for (let n = el; n; n = up(n)) if (n.id === 'ba-fetch-panel') return true; return false; };
   // every node of the page, through shadow roots and same-origin frames
+  const isPdfViewer = d => !!(d && (d.contentType === 'application/pdf' || d.querySelector('#viewerContainer, .pdfViewer, .textLayer, embed[type="application/pdf"]')));
   const everything = (root, visit) => {
     if (!root) return;
     const walk = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
@@ -73,7 +74,9 @@
       visit(n);
       if (n.nodeType === 1) {
         if (n.shadowRoot) everything(n.shadowRoot, visit);
-        if (n.tagName === 'IFRAME') { try { if (n.contentDocument) everything(n.contentDocument.body, visit); } catch { /* other origin */ } }
+        // a statement open in a PDF viewer is a document, not a list of
+        // statements: its printed dates and its page arrows are left alone
+        if (n.tagName === 'IFRAME') { try { const d = n.contentDocument; if (d && !isPdfViewer(d)) everything(d.body, visit); } catch { /* other origin */ } }
       }
     }
   };
@@ -443,6 +446,18 @@
     // not the statements page (an account overview, a home page) but something
     // is missing: go to the bank's statements page and carry on there — on
     // this page if it's an in-page route, after the load if it reloads
+    // a statement open in the bank's PDF viewer: back to the list first (once)
+    const viewerOpen = [...document.querySelectorAll('iframe, embed, object')].some(f => {
+      if (/pdf/i.test(f.getAttribute('type') || '')) return true;
+      try { return isPdfViewer(f.contentDocument); } catch { return false; }
+    });
+    if (viewerOpen && !(resume && resume.leftViewer)) {
+      say('Closing the open statement and going back to the list…');
+      self.dlog && dlog('leaving the PDF viewer');
+      history.back();
+      await waitForList();
+      return runAll({ ...(resume || { at: Date.now(), done: [] }), leftViewer: true });
+    }
     if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && seen.rows < 3 && missingSummary()) {
       const link = clickable(document.body, n => /^(statements?\s*(and|&)\s*documents|statements|view statements|e-?statements|documents)$/i.test(textOf(n)));
       if (link) {
@@ -518,10 +533,13 @@
       if (oldest && seen.newest && seen.newest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
       const next = nextControl();
       if (!next) break;
+      const was = seen.rows + '|' + seen.sample + '|' + seen.newest;
       next.scrollIntoView({ block: 'center' }); next.click(); pages++;
       await sleep(2500);
       // older pages can hold nothing missing for a while; a long run of them stops the walk
       emptyPages = findHits().some(wanted) ? 0 : emptyPages + 1;
+      // "next" that leaves the same rows isn't another page: there are no more
+      if (seen.rows + '|' + seen.sample + '|' + seen.newest === was) { self.dlog && dlog('next went nowhere — last page'); break; }
       if (emptyPages >= 30 || pages >= 200) break;
     }
     }
