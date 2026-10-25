@@ -137,7 +137,7 @@
       if (!card) continue;
       // the bank lists this period: whether a wanted gap was offered is told
       // from these once the account's list has been walked
-      sightings(card).set(period.a + '|' + period.b, period);
+      sightings(card).set(period.a + '|' + period.b, { ...period, label: text.slice(0, 70) });
       if (onFile(card, period)) continue;
       // older than the earliest statement Banking Aid has: not wanted
       if (card.from && period.b < card.from) continue;
@@ -270,6 +270,13 @@
       if (!ps.length) continue;
       const oldest = ps.map(p => p.a).sort()[0], newest = ps.map(p => p.b).sort().pop();
       for (const g of missingOf(c)) {
+        // what the bank listed around each wanted statement, for the log: why
+        // it was fetched, left, or found not offered
+        self.dlog && dlog('gap check', c.card, g.a + '→' + g.b, {
+          covering: ps.filter(p => covers(g, p)).map(p => p.a + '→' + p.b + ' ' + p.label),
+          near: ps.filter(p => days(p.b, g.a) <= 45 || days(p.a, g.b) <= 45).map(p => p.a + '→' + p.b + ' ' + p.label),
+          listReaches: oldest + '→' + newest
+        });
         if (ps.some(p => covers(g, p)) || oldest > g.a || newest < g.b) continue;
         self.dlog && dlog('not offered', c.card, g);
         await report({ card: c.card, outcome: 'not-offered', from: g.a, to: g.b });
