@@ -24,7 +24,7 @@ async function ba(path, init = {}, cfg = null) {
     // blocked before it left the browser: usually Firefox's permission for the
     // host is missing ("NetworkError"); say what to do instead
     const host = new URL(url).hostname;
-    throw new Error(`Couldn’t reach Banking Aid at ${host} (${e.message}). If Firefox hasn’t been allowed access to ${host}, open Settings, press Save & test and choose Allow; otherwise check Banking Aid is running`);
+    throw new Error(`Couldn’t reach Banking Aid at ${host} (${e.message}). If the browser hasn’t been allowed access to ${host}, open Settings, press Save & test and choose Allow; otherwise check Banking Aid is running`);
   }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(r.status === 401 ? 'Banking Aid didn’t accept the API token: copy it again from Banking Aid → Settings' : (body.error || `Banking Aid answered ${r.status}`));

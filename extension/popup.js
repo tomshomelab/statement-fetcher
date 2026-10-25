@@ -25,7 +25,7 @@ if ($('show')) $('show').onclick = async () => {
   const tab = activeTab;
   if (!tab || !/^https:/.test(tab.url || '')) { msg('Open your bank’s statements page (signed in), then press this.'); return; }
   const site = siteOf(new URL(tab.url).hostname);
-  if (!await browser.permissions.request({ origins: patternsFor([site]) }).catch(() => false)) { msg(`Firefox needs your OK to run on ${site}: press the button again and choose Allow.`); return; }
+  if (!await browser.permissions.request({ origins: patternsFor([site]) }).catch(() => false)) { msg(`Your browser needs your OK to run on ${site}: press the button again and choose Allow.`); return; }
   current.sites = [...new Set([...current.sites, site])];
   await browser.storage.local.set({ sites: current.sites });
   try {
@@ -51,7 +51,7 @@ $('save').onclick = async () => {
   const asking = browser.permissions.request({ origins: [host] }).catch(() => false);
   current = { ...current, url, token: $('token').value.trim() };
   await browser.storage.local.set({ url: current.url, token: current.token });
-  if (!await asking) { msg('Firefox needs your OK to reach Banking Aid: press Save & test again and choose Allow.'); return; }
+  if (!await asking) { msg('Your browser needs your OK to reach Banking Aid: press Save & test again and choose Allow.'); return; }
   // each step on its own, so a failure says exactly where it is
   const step = async (name, fn) => { try { return await fn(); } catch (e) { throw new Error(`${name}: ${e && e.message ? e.message : e}`); } };
   try {
