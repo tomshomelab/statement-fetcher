@@ -145,7 +145,10 @@
       const label = text.slice(0, 80) + (nth > 1 ? ' #' + nth : '');
       // a row Banking Aid found wasn't a statement (a yearly statement of fees)
       if ((card.skip || []).some(s => s.date === date && (!s.rowLabel || s.rowLabel === label))) continue;
-      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label });
+      // a gap Banking Aid is missing, or older history it has never had (before
+      // its first statement for this card): both are fetched, and said apart
+      const inGap = missingOf(card).some(g => g.a <= period.b && period.a <= g.b);
+      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label, kind: inGap ? 'missing' : 'older' });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -337,7 +340,7 @@
       const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333;cursor:pointer');
       const box = make('input'); box.type = 'checkbox'; box.checked = st === 'sent' || st === 'got';
       const name = make('span', box.checked ? 'text-decoration:line-through;color:#888' : st === 'failed' ? 'color:#ff8a8a' : '',
-        h.date.split('-').reverse().join('/') + ' - ' + h.label + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
+        h.date.split('-').reverse().join('/') + ' - ' + h.label + (h.kind === 'older' ? '  · older history' : h.kind === 'missing' ? '  · missing' : '') + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
       box.onchange = () => { state[h.key] = box.checked ? 'got' : ''; save(); render(); };
       name.onclick = ev => { ev.preventDefault(); open(h); };
       line.appendChild(box); line.appendChild(name);
@@ -350,7 +353,12 @@
       ? 'Nothing missing for ' + (BANK || 'this bank') + ' — Banking Aid has every statement it expects.'
       : !hits.length
       ? 'Missing — ' + wanted + '. The button opens only those accounts and years.'
-      : left ? left + ' statement' + (left === 1 ? '' : 's') + ' here for months Banking Aid hasn’t got. Statements it already has are left alone.' : 'All on this page done.';
+      : left ? (() => {
+        const open = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got');
+        const gap = open.filter(h => h.kind === 'missing').length, old = open.length - gap;
+        const part = (n, what) => n + ' ' + what + (n === 1 ? '' : 's');
+        return [gap && part(gap, 'missing statement'), old && part(old, 'older statement') + ' Banking Aid hasn’t had yet'].filter(Boolean).join(' + ') + ' here — all will be fetched. Statements it already has are left alone.';
+      })() : 'All on this page done.';
     if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
   };
   // the list again, after the page re-drew it (going back from a viewer)
