@@ -531,7 +531,7 @@
         const t = textOf(p);
         if (t.length > 300) break;
         const m = t.match(ACCT);
-        if (m) { out.push({ el: n, last4: m[1].slice(-4), name: t.replace(ACCT, ' ').replace(/£\s*[\d,.]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) }); break; }
+        if (m) { out.push({ el: n, last4: m[1].slice(-4), name: acctName(t) }); break; }
       }
     });
     return out;
@@ -561,7 +561,7 @@
         const last4 = m[1].slice(-4);
         if (!out.has(last4)) out.set(last4, {
           last4, number: m[1], sortCode: (t.match(/\b(\d{2}-\d{2}-\d{2})\s+\d{8}\b/) || [])[1] || null,
-          name: t.replace(ACCT, ' ').replace(/[-−]?£\s?[-−]?[\d,]+\.\d{2}/g, ' ').replace(/\b(available balance|balance|recent transactions|view transactions)\b/gi, ' ').replace(/[›>»]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40),
+          name: acctName(t),
           balance: (money[1] || money[2] ? -1 : 1) * Number(money[3].replace(/,/g, ''))
         });
         break;
