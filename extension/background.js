@@ -71,7 +71,16 @@ async function registerSites() {
     const allowed = [];
     for (const s of sites) if (await browser.permissions.contains({ origins: patternsFor([s]) }).catch(() => false)) allowed.push(s);
     if (allowed.length) registered = await browser.contentScripts.register({ matches: patternsFor(allowed), js: [{ file: 'log.js' }, { file: 'rpc.js' }, { file: 'content.js' }], runAt: 'document_idle' });
+    await allowDownloads(allowed);
   } catch (e) { console.warn('statement fetcher: could not register sites', e); }
+}
+// Chrome and Opera stop a page's second download until you press Allow in
+// the address bar: on the bank sites you've chosen, several are allowed
+// (Firefox asks nothing, and has no such setting)
+async function allowDownloads(sites) {
+  const ad = browser.contentSettings && browser.contentSettings.automaticDownloads;
+  if (!ad) return;
+  for (const p of patternsFor(sites)) await ad.set({ primaryPattern: p, setting: 'allow' }).catch(e => dlog('automatic downloads not set', p, e));
 }
 registerSites();
 browser.storage.onChanged.addListener(changes => { if (changes.sites) registerSites(); });
@@ -130,6 +139,7 @@ async function handle(msg, sender) {
     case 'plan':
       try { return await ba('/api/fetch-plan?host=' + encodeURIComponent(msg.host || ''), {}, msg.cfg); }
       catch (e) { if (!/answered 404/.test(e.message)) throw e; return planFromGaps(await ba('/api/statements/gaps', {}, msg.cfg), msg.host); }
+    case 'balance': return ba('/api/fetch-plan/balance', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(msg.balance || {}) }, msg.cfg);
     case 'report': return ba('/api/fetch-plan/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(msg.report || {}) }, msg.cfg);
     case 'queue': return ba('/api/import/queue', {}, msg.cfg);
     case 'arm': armed.set(sender.tab.id, { until: Date.now() + (msg.ms || 30000), host: hostOf(sender.tab.url || sender.url), at: Date.now() }); return { ok: true };

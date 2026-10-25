@@ -40,7 +40,8 @@ const manifest = {
   description: ff.description,
   minimum_chrome_version: '110',
   icons,
-  permissions: ['storage', 'downloads', 'tabs', 'scripting'],
+  // contentSettings: a bank site may download several statements in a row
+  permissions: ['storage', 'downloads', 'tabs', 'scripting', 'contentSettings'],
   // asked for one site at a time: Banking Aid's address, then each bank
   optional_host_permissions: ['http://*/*', 'https://*/*'],
   background: { service_worker: 'sw.js' },

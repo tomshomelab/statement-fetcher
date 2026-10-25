@@ -133,6 +133,20 @@
       // a page about one account (its header prints sort code + number) is
       // named by that account — row text there carries screen-reader words
       const pageLabel = (picked && picked.name) || pageAccountName() || (/\p{L}{2}/u.test(cleaned) ? cleaned : '');
+      // an account Banking Aid doesn't have yet, opened from the bank's list:
+      // every statement it lists is taken — Banking Aid makes the card from
+      // the first and files the rest; once the card exists, what it has is left
+      if (newMode && picked) {
+        const mine = cardFor(picked.last4);
+        if (mine && onFile(mine, period)) continue;
+        const base = 'new|' + picked.last4 + '|' + date;
+        const nth = (sameDate.get(base) || 0) + 1;
+        sameDate.set(base, nth);
+        const label = text.slice(0, 80) + (nth > 1 ? ' #' + nth : '');
+        if (mine && (mine.skip || []).some(s => s.date === date && (!s.rowLabel || s.rowLabel === label))) continue;
+        hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: mine ? mine.card : newName(picked), account: mine ? mine.card : 'Unsorted', known: true, pageLabel, date, label, gap: 'new|' + picked.last4 });
+        continue;
+      }
       // an account Banking Aid doesn't have: nothing on its list
       if (!card) continue;
       // the bank lists this period: whether a wanted gap was offered is told
@@ -197,6 +211,7 @@
       if (!items.has(k)) items.set(k, { key: k, card: c.card, a: g.a, b: g.b, n: g.n || 1, status: st });
     }
     for (const it of items.values()) {
+      if (it.isNew) continue; // a new account's status is the walk's
       const c = CARDS.find(x => x.card === it.card);
       const same = g => g.a === it.a && g.b === it.b;
       if (c && c.notOffered.some(same)) it.status = 'not-offered';
@@ -205,6 +220,17 @@
     }
   };
   const items = new Map();
+  // accounts on the bank's own list that Banking Aid doesn't have: all their
+  // statements are wanted (a household member's own accounts, say)
+  let newMode = false;
+  const newName = c => (c.name || 'Account') + ' …' + c.last4;
+  const noteNewAccounts = () => {
+    for (const c of accountChoices()) {
+      if (cardFor(c.last4) || items.has('new|' + c.last4)) continue;
+      items.set('new|' + c.last4, { key: 'new|' + c.last4, card: newName(c), isNew: true, n: 0, sent: 0, status: 'wanted' });
+    }
+  };
+  const newLeft = () => [...items.values()].some(it => it.isNew && it.status !== 'got');
   const report = r => call({ type: 'report', cfg, report: r }).catch(() => {});
   // the account a statements page is about, as its header names it: the words
   // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
@@ -418,15 +444,16 @@
     for (const h of hits) mark(h, state[h.key]);
     list.textContent = '';
     let group = null;
-    const all = [...items.values()].sort((x, y) => x.card.localeCompare(y.card) || x.a.localeCompare(y.a));
+    const all = [...items.values()].sort((x, y) => x.card.localeCompare(y.card) || (x.a || '').localeCompare(y.a || ''));
     for (const it of all) {
       if (it.card !== group) { group = it.card; list.appendChild(make('div', 'margin-top:10px;color:#7db7ff;font-weight:600', it.card)); }
       const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333');
       const box = make('input'); box.type = 'checkbox'; box.disabled = true; box.checked = it.status === 'got';
       const tag = { got: '', wanted: '', fetching: ' — fetching…', failed: ' — couldn’t get it: ' + (it.why || 'no reason'), 'not-offered': ' — ' + (BANK || 'the bank') + ' doesn’t offer it' }[it.status];
-      const name = make('span', it.status === 'got' ? 'text-decoration:line-through;color:#888' : it.status === 'failed' ? 'color:#ff8a8a' : it.status === 'not-offered' ? 'color:#888' : '', spanOf(it) + tag);
+      const name = make('span', it.status === 'got' ? 'text-decoration:line-through;color:#888' : it.status === 'failed' ? 'color:#ff8a8a' : it.status === 'not-offered' ? 'color:#888' : '',
+        (it.isNew ? 'new to Banking Aid — all statements' + (it.sent ? ` · ${it.sent} sent` : '') : spanOf(it)) + tag);
       // one click: this one, if it's on this page
-      if (it.status === 'wanted' || it.status === 'failed') {
+      if (!it.isNew && (it.status === 'wanted' || it.status === 'failed')) {
         name.style.cursor = 'pointer';
         name.title = 'Fetch this statement';
         name.onclick = ev => {
@@ -444,10 +471,11 @@
   // where this bank stands: wanted, got (since the panel opened), and what the
   // bank was found not to offer — counted in statements
   const statusLine = () => {
-    if (!BANK) return 'Banking Aid has no accounts at this bank.';
-    const sum = st => [...items.values()].filter(it => st.includes(it.status)).reduce((n, it) => n + it.n, 0);
+    const fresh = [...items.values()].filter(it => it.isNew && it.status !== 'got').length;
+    if (!BANK) return fresh ? `New to Banking Aid: ${count(fresh, 'account')} — every statement will be fetched` : 'Banking Aid has no accounts at this bank.';
+    const sum = st => [...items.values()].filter(it => !it.isNew && st.includes(it.status)).reduce((n, it) => n + it.n, 0);
     const want = sum(['wanted', 'fetching', 'failed']), got = sum(['got']), no = sum(['not-offered']);
-    return [want ? 'Wanted ' + want : 'Nothing missing for ' + BANK, got && 'Got ' + got, no && 'Not offered ' + no].filter(Boolean).join(' · ');
+    return [want ? 'Wanted ' + want : fresh ? '' : 'Nothing missing for ' + BANK, fresh && 'New accounts ' + fresh, got && 'Got ' + got, no && 'Not offered ' + no].filter(Boolean).join(' · ');
   };
   // the list again, after the page re-drew it (going back from a viewer)
   const waitForList = async () => {
@@ -495,6 +523,53 @@
       }
     });
     return out;
+  };
+  // a list that hides some accounts behind "Show all accounts": opened first
+  const showAllAccounts = async () => {
+    const more = clickable(document.body, n => /\b(show|view|see) all (my )?accounts\b/i.test(textOf(n) + ' ' + (n.getAttribute('aria-label') || '')) && shown(n));
+    if (!more) return false;
+    more.click();
+    await sleep(1500);
+    self.dlog && dlog('showed all accounts');
+    return true;
+  };
+  // the bank's account list (an overview, or the statements page's picker):
+  // each account's number and the balance the page shows for it
+  const accountTiles = () => {
+    const out = new Map();
+    everything(document.body, n => {
+      if (n.nodeType !== 3 || !n.parentElement || inPanel(n.parentElement) || !/\b\d{8}\b/.test(n.nodeValue || '')) return;
+      for (let p = n.parentElement, i = 0; p && i < 8; p = up(p), i++) {
+        const t = textOf(p);
+        if (t.length > 400) break;
+        const m = t.match(ACCT), money = t.match(/([-−])?\s*£\s?([-−])?\s?([\d,]+\.\d{2})/);
+        if (!m || !money) continue;
+        // a box holding two accounts isn't one account's
+        if ((t.match(new RegExp(ACCT.source, 'g')) || []).length > 1) break;
+        const last4 = m[1].slice(-4);
+        if (!out.has(last4)) out.set(last4, {
+          last4, number: m[1], sortCode: (t.match(/\b(\d{2}-\d{2}-\d{2})\s+\d{8}\b/) || [])[1] || null,
+          name: t.replace(ACCT, ' ').replace(/[-−]?£\s?[-−]?[\d,]+\.\d{2}/g, ' ').replace(/\b(available balance|balance|recent transactions|view transactions)\b/gi, ' ').replace(/[›>»]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40),
+          balance: (money[1] || money[2] ? -1 : 1) * Number(money[3].replace(/,/g, ''))
+        });
+        break;
+      }
+    });
+    return [...out.values()];
+  };
+  // each account's balance on the bank's page, as Banking Aid's balance for
+  // it today (an account it hasn't got keeps it until its card is made)
+  const sendSiteBalances = async () => {
+    await showAllAccounts();
+    const tiles = accountTiles();
+    let n = 0;
+    for (const t of tiles) {
+      const r = await call({ type: 'balance', cfg, balance: { number: t.number, sortCode: t.sortCode, name: t.name, balance: t.balance } }).catch(() => null);
+      if (r && !r.error) n++;
+    }
+    self.dlog && dlog('site balances', tiles.map(t => ({ last4: t.last4, balance: t.balance })), n + ' saved');
+    for (const t of tiles) if (!cardFor(t.last4) && !items.has('new|' + t.last4)) items.set('new|' + t.last4, { key: 'new|' + t.last4, card: newName(t), isNew: true, n: 0, sent: 0, status: 'wanted' });
+    return n;
   };
   const choose = async c => {
     c.el.scrollIntoView({ block: 'center' });
@@ -572,6 +647,7 @@
     state[h.key] = ok ? 'sent' : 'failed';
     await save();
     await back();
+    if (ok && it?.isNew) it.sent++;
     if (ok) { say('Banking Aid is reading ' + h.card + ' ' + h.date + '…'); await settle(); }
     // still on the list after Banking Aid read it (it wasn't the statement): wanted again
     if (it && it.status === 'fetching') it.status = 'wanted';
@@ -604,7 +680,14 @@
     let sent = 0, failed = 0;
     say('Asking Banking Aid what it wants…');
     try { await loadCards(); render(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
-    if (!missingSummary()) { say('Nothing to fetch.'); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
+    // nothing missing and no account here Banking Aid hasn't got: nothing to
+    // do (a bank's account list is only seen on its statements page)
+    // the balances the bank's page shows, once a run (before leaving an overview)
+    if (!(resume && resume.navigated)) { const b = await sendSiteBalances(); if (b) say(`${b} account balance${b === 1 ? '' : 's'} from the bank's page saved`); }
+    else await showAllAccounts();
+    noteNewAccounts(); render();
+    const onList = accountChoices().length > 1 || findHits().length || filterViews()[0] !== null;
+    if (!missingSummary() && !newLeft() && (onList || (resume && resume.navigated))) { say('Nothing to fetch.'); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
     // a statement open in the bank's PDF viewer: back to the list first (once)
     const viewerOpen = isPdfViewer(document) || [...document.querySelectorAll('iframe, embed, object')].some(f => {
       if (/pdf/i.test(f.getAttribute('type') || '')) return true;
@@ -646,13 +729,15 @@
       const gapsHere = () => card ? missingOf(card) : CARDS.flatMap(missingOf);
       const years = yearsNeeded(card);
       const recent = gapsHere().some(g => g.b >= addDays(new Date().toISOString().slice(0, 10), -366));
-      for (const view of filterViews().filter(v => !v || !v.label || (/last \d+ months/i.test(v.label) ? recent : [...years].some(y => v.label.includes(y))))) {
-        if (stop || !gapsHere().length) break;
+      // an account new to Banking Aid: every view, every page
+      const views = newMode ? filterViews() : filterViews().filter(v => !v || !v.label || (/last \d+ months/i.test(v.label) ? recent : [...years].some(y => v.label.includes(y))));
+      for (const view of views) {
+        if (stop || (!newMode && !gapsHere().length)) break;
         if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); }
         // a list (newest first) left on an older page than anything wanted —
         // where the last run ended: back to newer pages first
         findHits();
-        for (let i = 0; i < 60 && !stop; i++) {
+        for (let i = 0; i < 60 && !stop && !newMode; i++) {
           const newestWanted = gapsHere().map(g => g.b).sort().pop();
           const p = newestWanted && seen.newest && seen.newest < newestWanted ? prevControl() : null;
           if (!p) break;
@@ -679,12 +764,12 @@
           // nothing left wanted, or this page already older than the oldest
           // gap (newest first: every page after it is older still)
           const oldest = gapsHere().map(g => g.a).sort()[0];
-          if (!oldest) { self.dlog && dlog('nothing left wanted'); break; }
-          if (seen.oldest && seen.oldest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
+          if (!newMode && !oldest) { self.dlog && dlog('nothing left wanted'); break; }
+          if (!newMode && seen.oldest && seen.oldest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
           const next = nextControl();
           if (!next) break;
           const was = seen.rows + '|' + seen.sample + '|' + seen.newest;
-          say('Looking for ' + missingSummary() + ' — page ' + (pages + 1) + '…');
+          say((newMode ? 'Taking every statement for ' + newName(picked) : 'Looking for ' + missingSummary()) + ' — page ' + (pages + 1) + '…');
           await turn(next);
           // "next" that leaves the same rows isn't another page: there are no more
           if (seen.rows + '|' + seen.sample + '|' + seen.newest === was) { self.dlog && dlog('next went nowhere — last page'); break; }
@@ -702,14 +787,20 @@
         const c = choices.find(x => !run.done.includes(x.last4));
         if (!c) break;
         run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
-        if (!missingOf(cardFor(c.last4)).length) { self.dlog && dlog('skip account', c.last4); continue; }
+        const fresh = !cardFor(c.last4);
+        if (!fresh && !missingOf(cardFor(c.last4)).length) { self.dlog && dlog('skip account', c.last4); continue; }
         picked = c;
+        newMode = fresh;
+        const item = items.get('new|' + c.last4);
+        if (fresh && item) { item.status = 'fetching'; render(); }
         say('Opening ' + (c.name || 'account') + ' …' + c.last4 + '…');
         self.dlog && dlog('account', c.last4);
         if (await choose(c)) await walk();
+        newMode = false;
+        if (fresh && item && !stop) { item.status = 'got'; render(); }
         if (stop) break;
-        unoffered += await reportNotOffered([cardFor(c.last4)]);
-        if (!missingSummary()) break;
+        unoffered += await reportNotOffered([cardFor(c.last4)].filter(Boolean));
+        if (!missingSummary() && !newLeft()) break;
         if (!await backToChoices()) { say('Couldn’t get back to the account list: open it again and press the button, it carries on with the next account.'); break; }
       }
       await saveRun(null);
@@ -769,7 +860,7 @@
       const { run } = await browser.storage.local.get('run');
       sendAll(run && Date.now() - run.at < 30 * 60000 ? run : null);
     };
-    try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
+    try { await loadCards(); await loadState(); noteNewAccounts(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     try { hits = findHits(); render(); self.dlog && dlog('page read', { rows: seen.rows, dated: seen.dated, hits: hits.length, sample: seen.sample }); }
     catch (e) { self.dlog && dlog('reading the page failed', e); status.textContent = 'Couldn’t read this page’s statements (' + e.message + ').'; }
