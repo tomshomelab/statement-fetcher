@@ -105,7 +105,7 @@
       rows.set(row, n.parentElement);
     });
     const rowDates = [...rows.keys()].map(r => { const t = textOf(r); const p = periodIn(t); return p ? p.b : dateIn(t); }).filter(Boolean).sort();
-    seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '', newest: rowDates[rowDates.length - 1] || null };
+    seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '', newest: rowDates[rowDates.length - 1] || null, oldest: rowDates[0] || null };
     const hits = [];
     const sameDate = new Map();
     const whole = pageCard();
@@ -133,12 +133,8 @@
       // a page about one account (its header prints sort code + number) is
       // named by that account — row text there carries screen-reader words
       const pageLabel = (picked && picked.name) || pageAccountName() || (/\p{L}{2}/u.test(cleaned) ? cleaned : '');
-      if (!card) {
-        // an account Banking Aid doesn't have: listed, and sent only when
-        // clicked (Banking Aid files it by the account it prints)
-        hits.push({ row, leaf, key: 'page:' + pageLabel + '|' + date, card: (pageLabel || 'Unrecognised card') + ' (not in Banking Aid)', account: 'Unsorted', pageLabel, date, label: text.slice(0, 80), kind: 'unknown' });
-        continue;
-      }
+      // an account Banking Aid doesn't have: nothing on its list
+      if (!card) continue;
       // the bank lists this period: whether a wanted gap was offered is told
       // from these once the account's list has been walked
       sightings(card).set(period.a + '|' + period.b, period);
@@ -154,14 +150,11 @@
       const label = text.slice(0, 80) + (nth > 1 ? ' #' + nth : '');
       // a row Banking Aid found wasn't a statement (a yearly statement of fees)
       if ((card.skip || []).some(s => s.date === date && (!s.rowLabel || s.rowLabel === label))) continue;
-      // wanted: a gap on the plan (one once thought not offered counts, now
-      // it's listed), or newer than anything on file (a quiet account's
-      // statement); anything else between statements on file isn't
-      const overlaps = g => g.a <= period.b && period.a <= g.b;
-      const inGap = [...missingOf(card), ...card.notOffered].some(overlaps);
-      const newer = card.ranges.length && card.ranges.every(r => r.b < period.a);
-      if (!inGap && !newer) continue;
-      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label, kind: inGap ? 'missing' : 'new' });
+      // wanted only for a statement on Banking Aid's list (one once thought
+      // not offered counts, now it's listed)
+      const gap = [...missingOf(card), ...card.notOffered].find(g => covers(g, period));
+      if (!gap) continue;
+      hits.push({ row, leaf, key: base + (nth > 1 ? '#' + nth : ''), card: card.card, account: card.card, known: true, pageLabel, date, label, gap: itemKey(card.card, gap) });
     }
     return hits.sort((a, b) => a.card.localeCompare(b.card) || a.date.localeCompare(b.date));
   };
@@ -194,10 +187,24 @@
       from: c.from || null,
       ranges: c.have || [],
       skip: c.never || [],
-      gaps: (c.want || []).filter(g => g.status === 'wanted').map(period),
+      gaps: (c.want || []).filter(g => g.status === 'wanted').map(g => ({ ...period(g), n: g.statements || 1 })),
       notOffered: (c.want || []).filter(g => g.status === 'not-offered').map(period)
     })).filter(c => c.wordSets.length || c.last4);
+    // the panel's list: every statement wanted since the panel opened,
+    // ticked off once Banking Aid has it
+    for (const c of CARDS) for (const [g, st] of [...missingOf(c).map(g => [g, 'wanted']), ...c.notOffered.map(g => [g, 'not-offered'])]) {
+      const k = itemKey(c.card, g);
+      if (!items.has(k)) items.set(k, { key: k, card: c.card, a: g.a, b: g.b, n: g.n || 1, status: st });
+    }
+    for (const it of items.values()) {
+      const c = CARDS.find(x => x.card === it.card);
+      const same = g => g.a === it.a && g.b === it.b;
+      if (c && c.notOffered.some(same)) it.status = 'not-offered';
+      else if (!c || !missingOf(c).some(same)) it.status = 'got';
+      else if (it.status !== 'fetching' && it.status !== 'failed') it.status = 'wanted';
+    }
   };
+  const items = new Map();
   const report = r => call({ type: 'report', cfg, report: r }).catch(() => {});
   // the account a statements page is about, as its header names it: the words
   // before the first "sort code + number" ("Saver ISA (Closed) 20-46-07 …")
@@ -225,9 +232,22 @@
 
   // ── what's missing: the only thing a run fetches ───────────────────────
   const missingOf = card => (card && card.gaps || []).filter(g => !onFile(card, g));
+  // a statement is for a gap when it covers a real part of it (half the gap,
+  // or a week): the statement before it, touching it by a day, isn't
+  const covers = (g, p) => {
+    const o = (new Date(p.b < g.b ? p.b : g.b) - new Date(p.a > g.a ? p.a : g.a)) / 86400000 + 1;
+    return o >= Math.min(7, Math.max(1, (days(g.a, g.b) + 1) / 2));
+  };
+  const itemKey = (card, g) => card + '|' + g.a + '|' + g.b;
   const cardFor = last4 => CARDS.find(c => c.last4 && c.last4 === last4) || null;
   const monthOf = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
-  const missingSummary = () => CARDS.filter(c => missingOf(c).length).map(c => c.card + ': ' + missingOf(c).map(g => monthOf(g.b)).join(', ')).join(' · ');
+  // "May–Aug 2021 (3)": a gap's whole span, and the statements in it
+  const spanOf = g => {
+    const a = monthOf(g.a), b = monthOf(g.b);
+    const span = a === b ? b : a.slice(-4) === b.slice(-4) ? a.slice(0, -5) + '–' + b : a + ' – ' + b;
+    return span + ' (' + (g.n || 1) + ')';
+  };
+  const missingSummary = () => CARDS.filter(c => missingOf(c).length).map(c => c.card + ': ' + missingOf(c).map(spanOf).join(', ')).join(' · ');
   // the years worth opening on a year filter, for one card or every card here
   const yearsNeeded = card => new Set((card ? missingOf(card) : CARDS.flatMap(missingOf)).flatMap(g => {
     const out = []; for (let y = Number(g.a.slice(0, 4)); y <= Number(g.b.slice(0, 4)) + 1; y++) out.push(String(y)); return out;
@@ -250,7 +270,7 @@
       if (!ps.length) continue;
       const oldest = ps.map(p => p.a).sort()[0], newest = ps.map(p => p.b).sort().pop();
       for (const g of missingOf(c)) {
-        if (ps.some(p => p.a <= g.b && g.a <= p.b) || oldest > g.a || newest < g.b) continue;
+        if (ps.some(p => covers(g, p)) || oldest > g.a || newest < g.b) continue;
         self.dlog && dlog('not offered', c.card, g);
         await report({ card: c.card, outcome: 'not-offered', from: g.a, to: g.b });
         n++;
@@ -371,46 +391,45 @@
 
   // ── the panel ───────────────────────────────────────────────────────────
   const make = (tag, css, text) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; };
-  let panel = null, list, status, log, sendBtn, pageBtn, stopBtn, hits = [], stop = false;
+  let panel = null, list, status, log, sendBtn, stopBtn, hits = [], stop = false;
   const say = t => { if (log) log.textContent = t; };
   const mark = (h, st) => { h.row.style.outline = st === 'sent' || st === 'got' ? '2px solid #0ca30c' : st === 'failed' ? '2px solid #d03b3b' : '2px solid #e8a33d'; };
   const render = () => {
+    // the bank's rows that are wanted get an outline on the page; the panel
+    // lists only what Banking Aid wants, each ticked off once it has it
+    for (const h of hits) mark(h, state[h.key]);
     list.textContent = '';
     let group = null;
-    for (const h of hits) {
-      if (h.card !== group) { group = h.card; list.appendChild(make('div', 'margin-top:10px;color:#7db7ff;font-weight:600', h.card)); }
-      const st = state[h.key];
-      mark(h, st);
-      const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333;cursor:pointer');
-      const box = make('input'); box.type = 'checkbox'; box.checked = st === 'sent' || st === 'got';
-      const name = make('span', box.checked ? 'text-decoration:line-through;color:#888' : st === 'failed' ? 'color:#ff8a8a' : '',
-        h.date.split('-').reverse().join('/') + ' - ' + h.label + (h.kind === 'new' ? '  · new' : '') + (st === 'sent' ? '  (sent)' : st === 'failed' ? '  (couldn’t get it: ' + (state[h.key + '!'] || 'no reason recorded') + ')' : ''));
-      box.onchange = () => { state[h.key] = box.checked ? 'got' : ''; save(); render(); };
-      // one click: this statement goes to Banking Aid and is ticked off — never
-      // the bank's own viewer and download, which leave it on this computer
-      name.title = 'Send this statement to Banking Aid';
-      name.style.cursor = 'pointer';
-      name.onclick = ev => { ev.preventDefault(); fetchOne(h); };
+    const all = [...items.values()].sort((x, y) => x.card.localeCompare(y.card) || x.a.localeCompare(y.a));
+    for (const it of all) {
+      if (it.card !== group) { group = it.card; list.appendChild(make('div', 'margin-top:10px;color:#7db7ff;font-weight:600', it.card)); }
+      const line = make('label', 'display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px solid #333');
+      const box = make('input'); box.type = 'checkbox'; box.disabled = true; box.checked = it.status === 'got';
+      const tag = { got: '', wanted: '', fetching: ' — fetching…', failed: ' — couldn’t get it: ' + (it.why || 'no reason'), 'not-offered': ' — ' + (BANK || 'the bank') + ' doesn’t offer it' }[it.status];
+      const name = make('span', it.status === 'got' ? 'text-decoration:line-through;color:#888' : it.status === 'failed' ? 'color:#ff8a8a' : it.status === 'not-offered' ? 'color:#888' : '', spanOf(it) + tag);
+      // one click: this one, if it's on this page
+      if (it.status === 'wanted' || it.status === 'failed') {
+        name.style.cursor = 'pointer';
+        name.title = 'Fetch this statement';
+        name.onclick = ev => {
+          ev.preventDefault();
+          const h = findHits().find(x => x.gap === it.key);
+          if (h) fetchOne(h); else say('Not on this page: Fetch all missing finds it.');
+        };
+      }
       line.appendChild(box); line.appendChild(name);
       list.appendChild(line);
     }
-    const open = hits.filter(h => h.known && state[h.key] !== 'sent' && state[h.key] !== 'got');
-    if (pageBtn) { pageBtn.textContent = 'Fetch these ' + open.length; pageBtn.style.display = open.length && stopBtn.style.display === 'none' ? '' : 'none'; }
     sendBtn.textContent = 'Fetch all missing';
-    status.textContent = statusLine(open.length);
-    if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
+    status.textContent = statusLine();
   };
-  // where this bank stands, from the plan: what's wanted, and what the bank
-  // was found not to offer
-  const statusLine = here => {
+  // where this bank stands: wanted, got (since the panel opened), and what the
+  // bank was found not to offer — counted in statements
+  const statusLine = () => {
     if (!BANK) return 'Banking Aid has no accounts at this bank.';
-    const wanted = missingSummary(), none = notOfferedSummary();
-    const n = CARDS.reduce((s, c) => s + missingOf(c).length, 0);
-    return [
-      n ? 'Wanted ' + n + ' — ' + wanted + '.' : 'Nothing missing for ' + BANK + '.',
-      here ? count(here, 'statement') + ' on this page.' : '',
-      none ? 'Not offered by ' + BANK + ' — ' + none + '.' : ''
-    ].filter(Boolean).join(' ');
+    const sum = st => [...items.values()].filter(it => st.includes(it.status)).reduce((n, it) => n + it.n, 0);
+    const want = sum(['wanted', 'fetching', 'failed']), got = sum(['got']), no = sum(['not-offered']);
+    return [want ? 'Wanted ' + want : 'Nothing missing for ' + BANK, got && 'Got ' + got, no && 'Not offered ' + no].filter(Boolean).join(' · ');
   };
   // the list again, after the page re-drew it (going back from a viewer)
   const waitForList = async () => {
@@ -487,29 +506,71 @@
   // a run across accounts outlives a full page load: what's done is kept
   const saveRun = run => browser.storage.local.set({ run });
 
+  // after a statement is sent: wait for Banking Aid to read it (a minute at
+  // most) and take its list afresh — a statement is ticked off only once
+  // Banking Aid has it, and a copy of one it has is never fetched
+  const settle = async () => {
+    for (let i = 0; i < 30 && !stop; i++) {
+      await sleep(2000);
+      try { const q = await call({ type: 'queue', cfg }); if (q && !q.active) break; } catch { break; }
+    }
+    try { await loadCards(); } catch { /* keep the last list */ }
+  };
+  // one statement: its file from the bank, into Banking Aid → 'sent' or
+  // 'failed'. backToList: going back from a statement can land the list on
+  // another page, so the walk puts it back
+  const take = async (h, { retry = false, backToList = async () => {} } = {}) => {
+    const it = h.gap ? items.get(h.gap) : null;
+    if (it) { it.status = 'fetching'; render(); }
+    say('Getting ' + h.card + ' ' + h.date + '…');
+    self.dlog && dlog('getting', h.key, location.href);
+    const where = location.href;
+    const back = async () => { if (location.href !== where) { history.back(); await waitForList(); } await backToList(); };
+    let file = await getFile(h, say);
+    // one more go with longer to wait: big or old statements can take a
+    // while to build on the bank's side
+    if (file.why && retry && !stop) {
+      self.dlog && dlog('retrying', h.key, file.why);
+      await back();
+      const again = findHits().find(x => x.key === h.key);
+      if (again) { say('Trying ' + h.card + ' ' + h.date + ' again, waiting longer…'); file = await getFile(again, say, 60000); }
+    }
+    self.dlog && dlog('file', h.key, file.why ? { why: file.why } : { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null });
+    let ok = false;
+    if (file.why) {
+      if (it) { it.status = 'failed'; it.why = file.why; }
+      say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').');
+      report({ card: h.card, outcome: 'download-failed', date: h.date, rowLabel: h.label, detail: file.why });
+    } else if (!stop) {
+      say('Sending ' + h.card + ' ' + h.date + '…');
+      const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
+      ok = !!(r && r.ok);
+      if (!ok) {
+        const why = 'Banking Aid: ' + ((r && r.error) || 'upload failed');
+        if (it) { it.status = 'failed'; it.why = why; }
+        say(h.card + ' ' + h.date + ': ' + why);
+      }
+    }
+    state[h.key] = ok ? 'sent' : 'failed';
+    await save();
+    await back();
+    if (ok) { say('Banking Aid is reading ' + h.card + ' ' + h.date + '…'); await settle(); }
+    hits = findHits(); render();
+    return ok ? 'sent' : 'failed';
+  };
   // one statement from the list, straight into Banking Aid
   let busyOne = false;
   const fetchOne = async h => {
     if (busyOne) return;
     busyOne = true; stop = false;
-    try {
-      say('Getting ' + h.card + ' ' + h.date + '…');
-      const where = location.href;
-      const file = await getFile(h, say);
-      if (file.why) {
-        state[h.key] = 'failed'; state[h.key + '!'] = file.why; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').');
-        if (h.known) report({ card: h.card, outcome: 'download-failed', date: h.date, rowLabel: h.label, detail: file.why });
-      } else {
-        const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
-        state[h.key] = r && r.ok ? 'sent' : 'failed';
-        if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; say('Sent ' + h.card + ' ' + h.date + ' to Banking Aid.'); }
-        else { state[h.key + '!'] = 'Banking Aid: ' + ((r && r.error) || 'upload failed'); say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed')); }
-      }
-      await save();
-      if (location.href !== where) { history.back(); await waitForList(); }
-      hits = findHits(); render();
-    } finally { busyOne = false; }
+    try { await take(h); } finally { busyOne = false; }
   };
+  const prevControl = () => clickable(document.body, n => {
+    const t = (textOf(n) + ' ' + (n.getAttribute('aria-label') || '') + ' ' + (n.getAttribute('title') || '')).toLowerCase();
+    if (!/\b(prev(ious)?( page)?|newer)\b|^\s*[‹<«]\s*$/.test(t)) return false;
+    return !(n.disabled || n.getAttribute('aria-disabled') === 'true' || /disabled/.test(n.className || ''));
+  });
+  const turn = async ctl => { ctl.scrollIntoView({ block: 'center' }); ctl.click(); await sleep(2500); findHits(); };
   const sendAll = async (resume = null) => {
     try { await runAll(resume); }
     catch (e) {
@@ -520,14 +581,10 @@
   };
   const runAll = async (resume = null) => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
-    let sent = 0, failed = 0, pages = 1, emptyPages = 0, accountsDone = 0;
-    // what Banking Aid holds right now: a statement imported since the panel
-    // opened is on file, not missing
-    say('Asking Banking Aid what it already has…');
-    try { await loadCards(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
-    // not the statements page (an account overview, a home page) but something
-    // is missing: go to the bank's statements page and carry on there — on
-    // this page if it's an in-page route, after the load if it reloads
+    let sent = 0, failed = 0;
+    say('Asking Banking Aid what it wants…');
+    try { await loadCards(); render(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
+    if (!missingSummary()) { say('Nothing to fetch.'); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
     // a statement open in the bank's PDF viewer: back to the list first (once)
     const viewerOpen = isPdfViewer(document) || [...document.querySelectorAll('iframe, embed, object')].some(f => {
       if (/pdf/i.test(f.getAttribute('type') || '')) return true;
@@ -540,7 +597,10 @@
       await waitForList();
       return runAll({ ...(resume || { at: Date.now(), done: [] }), leftViewer: true });
     }
-    if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && seen.rows < 3 && missingSummary()) {
+    // not the statements page (an account overview, a home page): go to the
+    // bank's statements page and carry on there — on this page if it's an
+    // in-page route, after the load if it reloads
+    if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && seen.rows < 3) {
       const link = clickable(document.body, n => /^(statements?\s*(and|&)\s*documents|statements|view statements|e-?statements|documents)$/i.test(textOf(n)));
       if (link) {
         say('Opening the statements page…');
@@ -556,83 +616,63 @@
       stopBtn.style.display = 'none'; sendBtn.style.display = '';
       return;
     }
-    let sinceRefresh = 0;
-    // a recognised card's statement is wanted while Banking Aid hasn't it on
-    // file — tried once per run (one lost in an import restart comes back
-    // next run); a card it can't match yet goes by this browser's ticks
+    // each row tried once per run; only rows for a statement on the list
     const tried = new Set();
-    // …and one sent in the last 12 hours is still in Banking Aid's import
-    // queue, not missing: fetching it again only made copies
-    const recentlySent = x => state[x.key + '@'] && Date.now() - state[x.key + '@'] < 12 * 3600000;
-    const wanted = x => x.known && !tried.has(x.key) && !recentlySent(x);
+    const wanted = x => x.known && x.gap && !tried.has(x.key);
     seenPeriods = new Map();
     let unoffered = 0;
     const walk = async () => {
-    const card = picked ? cardFor(picked.last4) : null;
-    const years = yearsNeeded(card);
-    const recent = (card ? missingOf(card) : CARDS.flatMap(missingOf)).some(g => g.b >= addDays(new Date().toISOString().slice(0, 10), -366));
-    for (const view of filterViews().filter(v => !v || !v.label || (/last \d+ months/i.test(v.label) ? recent : [...years].some(y => v.label.includes(y))))) {
-    if (stop) break;
-    if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); emptyPages = 0; }
-    pageLoop: while (!stop) {
-      // one at a time, finding the row afresh each time: going back from a
-      // statement re-draws the list, and an old row no longer opens anything
-      for (;;) {
-        if (stop) break pageLoop;
-        hits = findHits(); render();
-        const h = hits.find(wanted);
-        if (!h) { self.dlog && dlog('nothing wanted here', { rows: seen.rows, dated: seen.dated, hits: hits.length, known: hits.filter(x => x.known).length, sample: seen.sample }); break; }
-        tried.add(h.key);
-        say('Getting ' + h.card + ' ' + h.date + '…');
-        self.dlog && dlog('getting', h.key, location.href);
-        const where = location.href;
-        let file = await getFile(h, say);
-        // one more go with longer to wait: big or old statements can take a
-        // while to build on the bank's side
-        if (file.why && !stop) {
-          self.dlog && dlog('retrying', h.key, file.why);
-          if (location.href !== where) { history.back(); await waitForList(); }
-          const again = findHits().find(x => x.key === h.key);
-          if (again) { say('Trying ' + h.card + ' ' + h.date + ' again, waiting longer…'); file = await getFile(again, say, 60000); }
+      const card = picked ? cardFor(picked.last4) : null;
+      const gapsHere = () => card ? missingOf(card) : CARDS.flatMap(missingOf);
+      const years = yearsNeeded(card);
+      const recent = gapsHere().some(g => g.b >= addDays(new Date().toISOString().slice(0, 10), -366));
+      for (const view of filterViews().filter(v => !v || !v.label || (/last \d+ months/i.test(v.label) ? recent : [...years].some(y => v.label.includes(y))))) {
+        if (stop || !gapsHere().length) break;
+        if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); }
+        // a list (newest first) left on an older page than anything wanted —
+        // where the last run ended: back to newer pages first
+        findHits();
+        for (let i = 0; i < 60 && !stop; i++) {
+          const newestWanted = gapsHere().map(g => g.b).sort().pop();
+          const p = newestWanted && seen.newest && seen.newest < newestWanted ? prevControl() : null;
+          if (!p) break;
+          self.dlog && dlog('back a page', seen.newest);
+          await turn(p);
         }
-        self.dlog && dlog('file', h.key, file.why ? { why: file.why } : { how: file.how, bytes: file.bytes ? file.bytes.byteLength : null, url: file.url ? file.url.slice(0, 60) : null });
-        if (stop) break pageLoop;
-        if (file.why) {
-          state[h.key] = 'failed'; state[h.key + '!'] = file.why; failed++; say('Couldn’t get ' + h.card + ' ' + h.date + ' (' + file.why + ').');
-          report({ card: h.card, outcome: 'download-failed', date: h.date, rowLabel: h.label, detail: file.why });
+        for (let pages = 1; !stop && pages < 200; pages++) {
+          const pageNewest = seen.newest;
+          // going back from a statement can show the list's first page again:
+          // on to the page it was on, without reading the ones between
+          const backToList = async () => {
+            findHits();
+            for (let i = 0; i < 60 && !stop && pageNewest && seen.newest && seen.newest > pageNewest; i++) { const n = nextControl(); if (!n) break; await turn(n); }
+          };
+          for (;;) {
+            if (stop) break;
+            hits = findHits(); render();
+            const h = hits.find(wanted);
+            if (!h) { self.dlog && dlog('nothing wanted here', { rows: seen.rows, hits: hits.length, sample: seen.sample }); break; }
+            tried.add(h.key);
+            (await take(h, { retry: true, backToList })) === 'sent' ? sent++ : failed++;
+          }
+          if (stop) break;
+          // nothing left wanted, or this page already older than the oldest
+          // gap (newest first: every page after it is older still)
+          const oldest = gapsHere().map(g => g.a).sort()[0];
+          if (!oldest) { self.dlog && dlog('nothing left wanted'); break; }
+          if (seen.oldest && seen.oldest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
+          const next = nextControl();
+          if (!next) break;
+          const was = seen.rows + '|' + seen.sample + '|' + seen.newest;
+          say('Looking for ' + missingSummary() + ' — page ' + (pages + 1) + '…');
+          await turn(next);
+          // "next" that leaves the same rows isn't another page: there are no more
+          if (seen.rows + '|' + seen.sample + '|' + seen.newest === was) { self.dlog && dlog('next went nowhere — last page'); break; }
         }
-        else {
-          say('Sending ' + h.card + ' ' + h.date + ' (' + file.how + ')…');
-          const r = await call({ type: 'upload', cfg, card: h.account, pageLabel: h.pageLabel, rowLabel: h.label, name: h.date + ' ' + h.card + '.pdf', bytes: file.bytes || null, url: file.url || null });
-          state[h.key] = r && r.ok ? 'sent' : 'failed';
-          if (r && r.ok) { state[h.key + '@'] = Date.now(); delete state[h.key + '!']; } else state[h.key + '!'] = 'Banking Aid: ' + ((r && r.error) || 'upload failed');
-          r && r.ok ? sent++ : failed++;
-          if (!r || !r.ok) say(h.card + ' ' + h.date + ': ' + ((r && r.error) || 'upload failed'));
-        }
-        await save();
-        if (location.href !== where) { history.back(); await waitForList(); }
-        // statements sent a while ago have imported by now: take the fresh list
-        if (++sinceRefresh >= 20) { sinceRefresh = 0; try { await loadCards(); } catch { /* keep the old list */ } }
-        await sleep(500);
       }
-      // pages run newest to oldest: past the oldest gap, nothing further is wanted
-      const oldest = oldestNeeded(picked ? cardFor(picked.last4) : null);
-      if (oldest && seen.newest && seen.newest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
-      const next = nextControl();
-      if (!next) break;
-      const was = seen.rows + '|' + seen.sample + '|' + seen.newest;
-      next.scrollIntoView({ block: 'center' }); next.click(); pages++;
-      await sleep(2500);
-      // older pages can hold nothing missing for a while; a long run of them stops the walk
-      emptyPages = findHits().some(wanted) ? 0 : emptyPages + 1;
-      // "next" that leaves the same rows isn't another page: there are no more
-      if (seen.rows + '|' + seen.sample + '|' + seen.newest === was) { self.dlog && dlog('next went nowhere — last page'); break; }
-      if (emptyPages >= 30 || pages >= 200) break;
-    }
-    }
     };
-    // an account picker: every account in turn, the ones done kept so a
-    // page reload carries on where it was
+    // an account picker: each account with something wanted, in turn — the
+    // ones done kept so a page reload carries on where it was
     let choices = accountChoices();
     if (choices.length > 1 && !findHits().length) {
       const run = resume || { at: Date.now(), done: [] };
@@ -642,42 +682,27 @@
         const c = choices.find(x => !run.done.includes(x.last4));
         if (!c) break;
         run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
-        // nothing missing for it (or not an account Banking Aid has): not opened
         if (!missingOf(cardFor(c.last4)).length) { self.dlog && dlog('skip account', c.last4); continue; }
         picked = c;
-        accountsDone++;
         say('Opening ' + (c.name || 'account') + ' …' + c.last4 + '…');
         self.dlog && dlog('account', c.last4);
-        emptyPages = 0;
         if (await choose(c)) await walk();
         if (stop) break;
         unoffered += await reportNotOffered([cardFor(c.last4)]);
+        if (!missingSummary()) break;
         if (!await backToChoices()) { say('Couldn’t get back to the account list: open it again and press the button, it carries on with the next account.'); break; }
       }
-      if (!stop && !accountChoices().some(x => !run.done.includes(x.last4))) await saveRun(null);
+      await saveRun(null);
     } else {
       await walk();
       if (!stop) unoffered += await reportNotOffered(CARDS);
     }
     if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
+    if (!stop) { try { await loadCards(); } catch { /* keep the last list */ } }
     hits = findHits(); render();
-    // where things stand now, from Banking Aid itself: all done, or what the
-    // bank doesn't have to give
-    if (!stop) {
-      // what was just sent is read first: wait for Banking Aid's queue (2 min at most)
-      if (sent) {
-        say('Waiting for Banking Aid to read what was sent…');
-        for (let i = 0; i < 40 && !stop; i++) {
-          await sleep(3000);
-          try { const q = await call({ type: 'queue', cfg }); if (q && !q.active) break; } catch { break; }
-        }
-      }
-      try { await loadCards(); } catch { /* keep the last list */ }
-      hits = findHits(); render();
-      if (!missingSummary()) { sendBtn.textContent = 'Nothing to fetch'; sendBtn.disabled = true; }
-    }
-    say((stop ? 'Stopped: ' : 'Done: ') + 'got ' + sent + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + (unoffered ? ', ' + unoffered + ' not offered by ' + (BANK || 'the bank') : '') + ' — ');
+    if (!missingSummary()) { sendBtn.textContent = 'Nothing to fetch'; sendBtn.disabled = true; }
+    say((stop ? 'Stopped: ' : 'Done: ') + 'sent ' + sent + (failed ? ', ' + failed + ' couldn’t be fetched' : '') + (unoffered ? ', ' + unoffered + ' not offered by ' + (BANK || 'the bank') : '') + ' — ');
     // where they went: Banking Aid's Import page lists them card by card
     const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
     see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
@@ -699,25 +724,13 @@
     panel.appendChild(status);
     const btnCss = 'background:#2b6fd6;color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:600';
     const bar = make('div', 'display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px');
-    // two jobs, two buttons: just the statements listed here, or everything
-    // missing (every account, year and page with a gap)
-    pageBtn = make('button', btnCss, 'Fetch these');
-    pageBtn.title = 'Sends only the statements listed below to Banking Aid';
-    pageBtn.style.display = 'none';
-    pageBtn.onclick = async () => {
-      for (;;) {
-        const h = hits.find(x => x.known && state[x.key] !== 'sent' && state[x.key] !== 'got' && state[x.key] !== 'failed');
-        if (!h || stop) break;
-        await fetchOne(h);
-      }
-    };
+    // every statement on the list, wherever the bank keeps it (one alone:
+    // click it in the list)
     sendBtn = make('button', btnCss, 'Fetch all missing');
-    sendBtn.title = 'Goes through every account, year and page with something missing and sends each statement Banking Aid hasn’t got. Statements already in Banking Aid are skipped.';
+    sendBtn.title = 'Finds and fetches every statement on the list';
     stopBtn = make('button', btnCss.replace('#2b6fd6', '#555'), 'Stop');
     stopBtn.style.display = 'none';
-    const reset = make('button', btnCss.replace('#2b6fd6', '#333'), 'Clear ticks');
-    reset.title = 'Forget which statements were sent, ticked or failed, to try them again';
-    bar.appendChild(pageBtn); bar.appendChild(sendBtn); bar.appendChild(stopBtn); bar.appendChild(reset);
+    bar.appendChild(sendBtn); bar.appendChild(stopBtn);
     panel.appendChild(bar);
     list = make('div'); panel.appendChild(list);
     log = make('div', 'color:#888;font-size:12px;margin-top:8px'); panel.appendChild(log);
@@ -736,7 +749,6 @@
       const { run } = await browser.storage.local.get('run');
       sendAll(run && Date.now() - run.at < 30 * 60000 ? run : null);
     };
-    reset.onclick = () => { state = {}; save(); hits = findHits(); render(); };
     try { await loadCards(); await loadState(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     try { hits = findHits(); render(); self.dlog && dlog('page read', { rows: seen.rows, dated: seen.dated, hits: hits.length, sample: seen.sample }); }

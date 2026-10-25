@@ -52,7 +52,7 @@ function planFromGaps(g, host) {
       card: c.card, names: [...new Set([c.label, ...(c.labels || []), c.card].filter(Boolean))], last4: c.last4 || null,
       from: [...(c.ranges || []).map(r => r.a), ...(c.gaps || []).map(x => x.from)].filter(Boolean).sort()[0] || null,
       have: c.ranges || [], never: c.skip || [],
-      want: (c.gaps || []).filter(x => x.from && x.to).map(x => ({ from: x.from, to: x.to, status: 'wanted' }))
+      want: (c.gaps || []).filter(x => x.from && x.to).map(x => ({ from: x.from, to: x.to, statements: (x.statements || []).length || 1, status: 'wanted' }))
     }))
   };
 }
