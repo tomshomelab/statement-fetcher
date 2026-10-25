@@ -199,6 +199,8 @@
       last4: c.last4 || null,
       // the earliest statement on file: nothing older is wanted
       from: c.from || null,
+      // made from the bank's page, nothing on file yet: every statement wanted
+      all: !!c.all,
       ranges: c.have || [],
       skip: c.never || [],
       gaps: (c.want || []).filter(g => g.status === 'wanted').map(g => ({ ...period(g), n: g.statements || 1 })),
@@ -226,12 +228,13 @@
   const newName = c => (c.name || 'Account') + ' …' + c.last4;
   const noteNewAccounts = () => {
     for (const c of accountChoices()) {
-      if (cardFor(c.last4) || items.has('new|' + c.last4)) continue;
+      const k = cardFor(c.last4);
+      if ((k && !k.all) || items.has('new|' + c.last4)) continue;
       items.set('new|' + c.last4, { key: 'new|' + c.last4, card: newName(c), isNew: true, n: 0, sent: 0, status: 'wanted' });
     }
   };
   // accounts on an overview page Banking Aid hasn't got (no balances sent: that's a run's)
-  const noteTiles = () => { for (const t of accountTiles()) if (!cardFor(t.last4) && !items.has('new|' + t.last4)) items.set('new|' + t.last4, { key: 'new|' + t.last4, card: newName(t), isNew: true, n: 0, sent: 0, status: 'wanted' }); };
+  const noteTiles = () => { for (const t of accountTiles()) if ((!cardFor(t.last4) || cardFor(t.last4).all) && !items.has('new|' + t.last4)) items.set('new|' + t.last4, { key: 'new|' + t.last4, card: newName(t), isNew: true, n: 0, sent: 0, status: 'wanted' }); };
   const newLeft = () => [...items.values()].some(it => it.isNew && it.status !== 'got');
   const report = r => call({ type: 'report', cfg, report: r }).catch(() => {});
   // the account a statements page is about, as its header names it: the words
@@ -686,7 +689,12 @@
     // nothing missing and no account here Banking Aid hasn't got: nothing to
     // do (a bank's account list is only seen on its statements page)
     // the balances the bank's page shows, once a run (before leaving an overview)
-    if (!(resume && resume.navigated)) { const b = await sendSiteBalances(); if (b) say(`${b} account balance${b === 1 ? '' : 's'} from the bank's page saved`); }
+    // first the accounts themselves: balances saved, and a card made in
+    // Banking Aid for each it hasn't got — then their statements
+    if (!(resume && resume.navigated)) {
+      const b = await sendSiteBalances();
+      if (b) { say(`${b} account${b === 1 ? '' : 's'} from the bank's page saved`); try { await loadCards(); } catch { /* keep the last plan */ } }
+    }
     else await showAllAccounts();
     noteNewAccounts(); render();
     const onList = accountChoices().length > 1 || findHits().length || filterViews()[0] !== null;
@@ -791,7 +799,7 @@
         const c = choices.find(x => !run.done.includes(x.last4));
         if (!c) break;
         run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
-        const fresh = !cardFor(c.last4);
+        const fresh = !cardFor(c.last4) || cardFor(c.last4).all;
         if (!fresh && !missingOf(cardFor(c.last4)).length) { self.dlog && dlog('skip account', c.last4); continue; }
         picked = c;
         newMode = fresh;
