@@ -235,6 +235,9 @@
   // a statement is for a gap when it covers a real part of it (half the gap,
   // or a week): the statement before it, touching it by a day, isn't
   const covers = (g, p) => {
+    // a yearly summary listed alongside (Barclays: "April 2025 Statement",
+    // a whole year) isn't the month a monthly gap wants
+    if (days(p.a, p.b) > 100 && days(g.a, g.b) < 100) return false;
     const o = (new Date(p.b < g.b ? p.b : g.b) - new Date(p.a > g.a ? p.a : g.a)) / 86400000 + 1;
     return o >= Math.min(7, Math.max(1, (days(g.a, g.b) + 1) / 2));
   };
@@ -270,6 +273,14 @@
       if (!ps.length) continue;
       const oldest = ps.map(p => p.a).sort()[0], newest = ps.map(p => p.b).sort().pop();
       for (const g of missingOf(c)) {
+        // the bank's own statement for it is one Banking Aid already has,
+        // filed under a narrower period (its rows' dates): nothing to fetch
+        const held = ps.find(p => covers(g, p) && onFile(c, p));
+        if (held) {
+          self.dlog && dlog('already on file', c.card, g, held.label);
+          await report({ card: c.card, outcome: 'on-file', from: g.a, to: g.b, detail: held.a + '→' + held.b + ' ' + held.label });
+          continue;
+        }
         // what the bank listed around each wanted statement, for the log: why
         // it was fetched, left, or found not offered
         self.dlog && dlog('gap check', c.card, g.a + '→' + g.b, {
@@ -562,6 +573,8 @@
     await save();
     await back();
     if (ok) { say('Banking Aid is reading ' + h.card + ' ' + h.date + '…'); await settle(); }
+    // still on the list after Banking Aid read it (it wasn't the statement): wanted again
+    if (it && it.status === 'fetching') it.status = 'wanted';
     hits = findHits(); render();
     return ok ? 'sent' : 'failed';
   };
