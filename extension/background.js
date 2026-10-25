@@ -42,6 +42,21 @@ async function upload({ card, name, bytes, pageLabel, rowLabel }, cfg) {
   return { ok: true };
 }
 
+// a Banking Aid older than the fetch plan: the same plan, built from its gaps
+function planFromGaps(g, host) {
+  const sq = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const cards = (g.cards || []).filter(c => sq(c.bank).length >= 3 && sq(host).includes(sq(c.bank)));
+  return {
+    bank: cards.length ? cards[0].bank : null,
+    accounts: cards.map(c => ({
+      card: c.card, names: [...new Set([c.label, ...(c.labels || []), c.card].filter(Boolean))], last4: c.last4 || null,
+      from: [...(c.ranges || []).map(r => r.a), ...(c.gaps || []).map(x => x.from)].filter(Boolean).sort()[0] || null,
+      have: c.ranges || [], never: c.skip || [],
+      want: (c.gaps || []).filter(x => x.from && x.to).map(x => ({ from: x.from, to: x.to, status: 'wanted' }))
+    }))
+  };
+}
+
 const isPdf = bytes => bytes && bytes.byteLength > 500 && String.fromCharCode(...new Uint8Array(bytes.slice(0, 5))) === '%PDF-';
 
 // ── which bank sites the page script runs on ──────────────────────────────
@@ -112,7 +127,9 @@ async function handle(msg, sender) {
     case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
     // what Banking Aid wants from this bank, and what the fetcher found
-    case 'plan': return ba('/api/fetch-plan?host=' + encodeURIComponent(msg.host || ''), {}, msg.cfg);
+    case 'plan':
+      try { return await ba('/api/fetch-plan?host=' + encodeURIComponent(msg.host || ''), {}, msg.cfg); }
+      catch (e) { if (!/answered 404/.test(e.message)) throw e; return planFromGaps(await ba('/api/statements/gaps', {}, msg.cfg), msg.host); }
     case 'report': return ba('/api/fetch-plan/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(msg.report || {}) }, msg.cfg);
     case 'queue': return ba('/api/import/queue', {}, msg.cfg);
     case 'arm': armed.set(sender.tab.id, { until: Date.now() + (msg.ms || 30000), host: hostOf(sender.tab.url || sender.url), at: Date.now() }); return { ok: true };
@@ -129,7 +146,7 @@ async function handle(msg, sender) {
       catch (e) { return { ok: false, error: e.message }; }
     }
     case 'test': {
-      try { const g = await ba('/api/statements/gaps', {}, msg.cfg); return { ok: true, cards: (g.cards || []).length }; }
+      try { const g = await ba('/api/statements/gaps', {}, msg.cfg); return { ok: true, missing: (g.cards || []).reduce((n, c) => n + (c.gaps || []).length, 0) }; }
       catch (e) { return { ok: false, error: e.message + (e.stack ? ' [at ' + String(e.stack).split('\n')[0].slice(0, 80) + ']' : '') }; }
     }
   }

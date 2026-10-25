@@ -65,6 +65,6 @@ $('save').onclick = async () => {
     msg('Testing 3/3: Banking Aid through the background…');
     const r = await step('3 · reaching Banking Aid through the background', () => call({ type: 'test', cfg: { url: current.url, token: current.token } }));
     if (!r || !r.ok) throw new Error('3 · ' + ((r && r.error) || 'no answer'));
-    msg(`✓ Connected (v${pong.version}): ${r.cards} card${r.cards === 1 ? '' : 's'} with missing statements.`);
+    msg(`✓ Connected (v${pong.version}): ${r.missing ? r.missing + ' missing statement' + (r.missing === 1 ? '' : 's') : 'nothing missing'}.`);
   } catch (e) { dlog('save & test failed', e); msg('✕ ' + e.message); }
 };
