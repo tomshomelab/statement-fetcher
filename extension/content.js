@@ -96,7 +96,8 @@
       }
       rows.set(row, n.parentElement);
     });
-    seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '' };
+    const rowDates = [...rows.keys()].map(r => { const t = textOf(r); const p = periodIn(t); return p ? p.b : dateIn(t); }).filter(Boolean).sort();
+    seen = { dated, rows: rows.size, sample: rows.size ? textOf([...rows.keys()][0]).slice(0, 90) : '', newest: rowDates[rowDates.length - 1] || null };
     const hits = [];
     const whole = pageCard();
     for (const [row, leaf] of rows) {
@@ -157,7 +158,9 @@
       card: c.card,
       words: [...new Set(words(c.label || c.card).filter(w => !STOP.includes(w) && !words(c.bank).includes(w)).map(w => w.slice(0, 5)))],
       last4: c.last4 || null,
-      ranges: c.ranges || []
+      ranges: c.ranges || [],
+      // what Banking Aid is missing for this card: the periods with no statement
+      gaps: (c.gaps || []).filter(g => g.from && g.to).map(g => ({ a: g.from, b: g.to }))
     })).filter(c => c.words.length || c.last4);
   };
   // the account a statements page is about, as its header names it: the words
@@ -183,6 +186,17 @@
     const overlap = (new Date(r.b < period.b ? r.b : period.b) - new Date(r.a > period.a ? r.a : period.a)) / 86400000;
     return overlap >= 0.5 * Math.max(1, days(period.a, period.b));
   });
+
+  // ── what's missing: the only thing a run fetches ───────────────────────
+  const missingOf = card => (card && card.gaps || []).filter(g => !onFile(card, g));
+  const cardFor = last4 => CARDS.find(c => c.last4 && c.last4 === last4) || null;
+  const monthOf = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const missingSummary = () => CARDS.filter(c => missingOf(c).length).map(c => c.card + ': ' + missingOf(c).map(g => monthOf(g.b)).join(', ')).join(' · ');
+  // the years worth opening on a year filter, for one card or every card here
+  const yearsNeeded = card => new Set((card ? missingOf(card) : CARDS.flatMap(missingOf)).flatMap(g => {
+    const out = []; for (let y = Number(g.a.slice(0, 4)); y <= Number(g.b.slice(0, 4)) + 1; y++) out.push(String(y)); return out;
+  }));
+  const oldestNeeded = card => (card ? missingOf(card) : CARDS.flatMap(missingOf)).map(g => g.a).sort()[0] || null;
 
   // ── ticks: what's been sent, kept by the extension across reloads ───────
   let state = {};
@@ -317,10 +331,11 @@
     }
     const left = hits.filter(h => state[h.key] !== 'sent' && state[h.key] !== 'got').length;
     sendBtn.textContent = left ? 'Fetch ' + left + ' missing statement' + (left === 1 ? '' : 's') + ' (then older pages)' : accountChoices().length > 1 ? 'Fetch missing statements for every account' : 'Fetch missing statements';
-    status.textContent = !hits.length && accountChoices().length > 1
-      ? accountChoices().length + ' accounts here. The button opens each in turn and fetches the statements Banking Aid hasn’t got.'
+    const wanted = missingSummary();
+    status.textContent = !hits.length && !wanted
+      ? 'Nothing missing for ' + (BANK || 'this bank') + ' — Banking Aid has every statement it expects.'
       : !hits.length
-      ? 'Nothing missing on this page. The button still walks the older pages and years for months Banking Aid hasn’t got.'
+      ? 'Missing — ' + wanted + '. The button opens only those accounts and years.'
       : left ? left + ' statement' + (left === 1 ? '' : 's') + ' here for months Banking Aid hasn’t got. Statements it already has are left alone.' : 'All on this page done.';
     if (!hits.length) say('Looking for: ' + CARDS.map(c => c.card).join(', ') + '. Seen: ' + seen.dated + ' dates in ' + seen.rows + ' rows' + (seen.sample ? ', e.g. "' + seen.sample + '"' : '') + '.');
   };
@@ -344,14 +359,14 @@
     if (!years) return [null];
     const months = sels.find(s => s !== years && [...s.options].some(o => /^\s*all/i.test(o.text)));
     const set = (sel, opt) => { sel.value = opt.value; sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); };
-    return [...years.options].filter(o => !o.disabled && o.value !== '').map(o => async () => {
+    return [...years.options].filter(o => !o.disabled && o.value !== '').map(o => Object.assign(async () => {
       if (months) set(months, [...months.options].find(m => /^\s*all/i.test(m.text)));
       set(years, o);
       const go = clickable(document.body, n => /^(filter|search|apply|show|go|update)$/i.test(textOf(n)));
       if (go) go.click();
       await sleep(3000);
       return o.text.trim();
-    });
+    }, { label: o.text.trim() }));
   };
 
   // an account picker ("Select which account…"): each choice prints its sort
@@ -424,7 +439,10 @@
     const recentlySent = x => state[x.key + '@'] && Date.now() - state[x.key + '@'] < 12 * 3600000;
     const wanted = x => x.known ? !tried.has(x.key) && !recentlySent(x) : !state[x.key];
     const walk = async () => {
-    for (const view of filterViews()) {
+    const card = picked ? cardFor(picked.last4) : null;
+    const years = yearsNeeded(card);
+    const recent = (card ? missingOf(card) : CARDS.flatMap(missingOf)).some(g => g.b >= addDays(new Date().toISOString().slice(0, 10), -366));
+    for (const view of filterViews().filter(v => !v || !v.label || (/last \d+ months/i.test(v.label) ? recent : [...years].some(y => v.label.includes(y))))) {
     if (stop) break;
     if (view) { const name = await view(); say('Looking at ' + name + '…'); self.dlog && dlog('filter view', name); emptyPages = 0; }
     pageLoop: while (!stop) {
@@ -465,6 +483,9 @@
         if (++sinceRefresh >= 20) { sinceRefresh = 0; try { await loadCards(); } catch { /* keep the old list */ } }
         await sleep(500);
       }
+      // pages run newest to oldest: past the oldest gap, nothing further is wanted
+      const oldest = oldestNeeded(picked ? cardFor(picked.last4) : null);
+      if (oldest && seen.newest && seen.newest < oldest) { self.dlog && dlog('past the oldest gap', oldest); break; }
       const next = nextControl();
       if (!next) break;
       next.scrollIntoView({ block: 'center' }); next.click(); pages++;
@@ -486,6 +507,8 @@
         const c = choices.find(x => !run.done.includes(x.last4));
         if (!c) break;
         run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
+        // nothing missing for it (or not an account Banking Aid has): not opened
+        if (!missingOf(cardFor(c.last4)).length) { self.dlog && dlog('skip account', c.last4); continue; }
         picked = c;
         accountsDone++;
         say('Opening ' + (c.name || 'account') + ' …' + c.last4 + '…');
