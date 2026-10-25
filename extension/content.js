@@ -230,6 +230,8 @@
       items.set('new|' + c.last4, { key: 'new|' + c.last4, card: newName(c), isNew: true, n: 0, sent: 0, status: 'wanted' });
     }
   };
+  // accounts on an overview page Banking Aid hasn't got (no balances sent: that's a run's)
+  const noteTiles = () => { for (const t of accountTiles()) if (!cardFor(t.last4) && !items.has('new|' + t.last4)) items.set('new|' + t.last4, { key: 'new|' + t.last4, card: newName(t), isNew: true, n: 0, sent: 0, status: 'wanted' }); };
   const newLeft = () => [...items.values()].some(it => it.isNew && it.status !== 'got');
   const report = r => call({ type: 'report', cfg, report: r }).catch(() => {});
   // the account a statements page is about, as its header names it: the words
@@ -677,6 +679,7 @@
   };
   const runAll = async (resume = null) => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
+    for (const it of (resume && resume.fresh) || []) if (!items.has(it.key)) items.set(it.key, { ...it, isNew: true, n: 0, sent: 0, status: 'wanted' });
     let sent = 0, failed = 0;
     say('Asking Banking Aid what it wants…');
     try { await loadCards(); render(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
@@ -703,11 +706,12 @@
     // not the statements page (an account overview, a home page): go to the
     // bank's statements page and carry on there — on this page if it's an
     // in-page route, after the load if it reloads
-    if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && seen.rows < 3) {
+    const overview = accountChoices().length < 2 && accountTiles().length > 0;
+    if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && (seen.rows < 3 || overview)) {
       const link = clickable(document.body, n => /^(statements?\s*(and|&)\s*documents|statements|view statements|e-?statements|documents)$/i.test(textOf(n)));
       if (link) {
         say('Opening the statements page…');
-        const run = { at: Date.now(), done: [], navigated: true };
+        const run = { at: Date.now(), done: [], navigated: true, fresh: [...items.values()].filter(it => it.isNew).map(it => ({ key: it.key, card: it.card })) };
         await saveRun(run);
         self.dlog && dlog('going to the statements page', textOf(link));
         link.click();
@@ -860,7 +864,7 @@
       const { run } = await browser.storage.local.get('run');
       sendAll(run && Date.now() - run.at < 30 * 60000 ? run : null);
     };
-    try { await loadCards(); await loadState(); noteNewAccounts(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
+    try { await loadCards(); await loadState(); noteNewAccounts(); noteTiles(); if (BANK) title.textContent = 'Banking Aid - missing ' + BANK + ' statements'; }
     catch (e) { self.dlog && dlog('panel: loading cards failed', e); status.textContent = 'Could not reach Banking Aid: ' + e.message + '. Check the address and API token in the extension’s settings (toolbar button).'; return; }
     try { hits = findHits(); render(); self.dlog && dlog('page read', { rows: seen.rows, dated: seen.dated, hits: hits.length, sample: seen.sample }); }
     catch (e) { self.dlog && dlog('reading the page failed', e); status.textContent = 'Couldn’t read this page’s statements (' + e.message + ').'; }
