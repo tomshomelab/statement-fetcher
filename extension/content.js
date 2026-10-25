@@ -235,8 +235,8 @@
   // a statement is for a gap when it covers a real part of it (half the gap,
   // or a week): the statement before it, touching it by a day, isn't
   const covers = (g, p) => {
-    // a yearly summary listed alongside (Barclays: "April 2025 Statement",
-    // a whole year) isn't the month a monthly gap wants
+    // a yearly summary listed alongside (an "April Statement" covering a
+    // whole year) isn't the month a monthly gap wants
     if (days(p.a, p.b) > 100 && days(g.a, g.b) < 100) return false;
     const o = (new Date(p.b < g.b ? p.b : g.b) - new Date(p.a > g.a ? p.a : g.a)) / 86400000 + 1;
     return o >= Math.min(7, Math.max(1, (days(g.a, g.b) + 1) / 2));
