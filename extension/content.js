@@ -429,6 +429,25 @@
     // opened is on file, not missing
     say('Asking Banking Aid what it already has…');
     try { await loadCards(); } catch (e) { say('Could not reach Banking Aid: ' + e.message); stopBtn.style.display = 'none'; sendBtn.style.display = ''; return; }
+    // not the statements page (an account overview, a home page) but something
+    // is missing: go to the bank's statements page and carry on there — on
+    // this page if it's an in-page route, after the load if it reloads
+    if (!(resume && resume.navigated) && !findHits().length && accountChoices().length < 2 && filterViews()[0] === null && seen.rows < 3 && missingSummary()) {
+      const link = clickable(document.body, n => /^(statements?\s*(and|&)\s*documents|statements|view statements|e-?statements|documents)$/i.test(textOf(n)));
+      if (link) {
+        say('Opening the statements page…');
+        const run = { at: Date.now(), done: [], navigated: true };
+        await saveRun(run);
+        self.dlog && dlog('going to the statements page', textOf(link));
+        link.click();
+        for (let i = 0; i < 30 && !stop; i++) { await sleep(500); if (accountChoices().length > 1 || findHits().length || filterViews()[0] !== null) break; }
+        if (stop) return;
+        return runAll(run);
+      }
+      say('This isn’t a statements page, and no link to one was found: open the bank’s statements page and press the button there.');
+      stopBtn.style.display = 'none'; sendBtn.style.display = '';
+      return;
+    }
     let sinceRefresh = 0;
     // a recognised card's statement is wanted while Banking Aid hasn't it on
     // file — tried once per run (one lost in an import restart comes back
@@ -583,7 +602,10 @@
       const { run } = await browser.storage.local.get('run');
       if (!run || Date.now() - run.at > 30 * 60000) return;
       await sleep(2000);
-      if (panel || accountChoices().length < 2) return;
+      // a run that went to the statements page: carry on there once it has
+      // its account list or statements
+      if (run.navigated) for (let i = 0; i < 20 && accountChoices().length < 2 && filterViews()[0] === null; i++) await sleep(500);
+      if (panel || (accountChoices().length < 2 && !run.navigated)) return;
       await build();
       sendAll(run);
     } catch { /* nothing to resume */ }
