@@ -64,11 +64,20 @@ browser.permissions.onRemoved.addListener(registerSites);
 // ── catching the bank's download ──────────────────────────────────────────
 // armed: the tab waiting for a statement. A download that starts while armed
 // never reaches the Downloads folder.
-let armed = null; // { tabId, until }
+// One per tab: two tabs fetching at once (a bank in each) must not take each
+// other's file — a download goes to the tab on its site, else the one that
+// asked most recently.
+const armed = new Map(); // tabId -> { until, host, at }
+const hostOf = u => { try { return new URL(String(u).replace(/^blob:/, '')).hostname; } catch { return ''; } };
+const siteOf = h => h.split('.').slice(-3).join('.');
 browser.downloads.onCreated.addListener(async item => {
-  if (!armed || Date.now() > armed.until) return;
-  const { tabId } = armed;
-  armed = null;
+  const now = Date.now();
+  const live = [...armed.entries()].filter(([, a]) => a.until > now);
+  if (!live.length) return;
+  const host = hostOf(item.url);
+  const mine = live.find(([, a]) => host && (host === a.host || siteOf(host) === siteOf(a.host))) || live.sort((x, y) => y[1].at - x[1].at)[0];
+  const tabId = mine[0];
+  armed.delete(tabId);
   try { await browser.downloads.cancel(item.id); } catch { /* already done */ }
   try { await browser.downloads.erase({ id: item.id }); } catch { /* not listed */ }
   // a blob: URL belongs to the page — only the tab can read it
@@ -100,8 +109,8 @@ async function handle(msg, sender) {
     case 'log': fetch('http://127.0.0.1:8777/log', { method: 'POST', body: msg.line }).catch(() => {}); return { ok: true };
     case 'ping': return { pong: true, version: browser.runtime.getManifest().version };
     case 'gaps': return ba('/api/statements/gaps', {}, msg.cfg);
-    case 'arm': armed = { tabId: sender.tab.id, until: Date.now() + (msg.ms || 30000) }; return { ok: true };
-    case 'disarm': if (armed && armed.tabId === sender.tab.id) armed = null; return { ok: true };
+    case 'arm': armed.set(sender.tab.id, { until: Date.now() + (msg.ms || 30000), host: hostOf(sender.tab.url || sender.url), at: Date.now() }); return { ok: true };
+    case 'disarm': armed.delete(sender.tab.id); return { ok: true };
     // a statement's file, read by the tab or fetched here from an https link
     case 'upload': {
       let bytes = msg.bytes;

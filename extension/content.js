@@ -28,8 +28,22 @@
     r = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4}|\d{2})/i);
     return r ? iso(+r[3], MN[r[2].slice(0, 3).toLowerCase()], +r[1]) : null;
   };
-  const dateIn = t => { for (const m of String(t).match(DATE) || []) { const d = parseDate(m); if (d) return d; } return null; };
-  const periodIn = t => { const r = new RegExp(RANGE.source, 'i').exec(t); const p = r && { a: parseDate(r[1]), b: parseDate(r[2]) }; return p && p.a && p.b ? p : null; };
+  // a statement can't be dated in the future: a year read wrong ("Nov 26"
+  // for Nov 25) takes the year before, or it's wanted again every run
+  const notAhead = d => {
+    if (!d) return d;
+    const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    if (d <= soon) return d;
+    const back = (Number(d.slice(0, 4)) - 1) + d.slice(4);
+    return back <= soon ? back : null;
+  };
+  const dateIn = t => { for (const m of String(t).match(DATE) || []) { const d = notAhead(parseDate(m)); if (d) return d; } return null; };
+  const periodIn = t => {
+    const r = new RegExp(RANGE.source, 'i').exec(t);
+    const p = r && { a: parseDate(r[1]), b: notAhead(parseDate(r[2])) };
+    if (p && p.a && p.b && p.a > p.b) p.a = (Number(p.a.slice(0, 4)) - 1) + p.a.slice(4);
+    return p && p.a && p.b ? p : null;
+  };
   const dateUnits = t => { const ranges = (t.match(RANGE) || []).length; return ranges + (t.replace(RANGE, ' ').match(DATE) || []).length; };
   const days = (a, b) => Math.abs(new Date(a) - new Date(b)) / 86400000;
   const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
@@ -395,7 +409,7 @@
   };
   const runAll = async (resume = null) => {
     stop = false; sendBtn.style.display = 'none'; stopBtn.style.display = '';
-    let sent = 0, failed = 0, pages = 1, emptyPages = 0;
+    let sent = 0, failed = 0, pages = 1, emptyPages = 0, accountsDone = 0;
     // what Banking Aid holds right now: a statement imported since the panel
     // opened is on file, not missing
     say('Asking Banking Aid what it already has…');
@@ -473,6 +487,7 @@
         if (!c) break;
         run.done.push(c.last4); run.at = Date.now(); await saveRun(run);
         picked = c;
+        accountsDone++;
         say('Opening ' + (c.name || 'account') + ' …' + c.last4 + '…');
         self.dlog && dlog('account', c.last4);
         emptyPages = 0;
@@ -485,7 +500,7 @@
     if (stop) await saveRun(null);
     stopBtn.style.display = 'none'; sendBtn.style.display = '';
     hits = findHits(); render();
-    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + pages + ' page' + (pages === 1 ? '' : 's') + '. They import in the background — ');
+    say((stop ? 'Stopped: ' : 'Done: ') + sent + ' missing statement' + (sent === 1 ? '' : 's') + ' sent to Banking Aid' + (failed ? ', ' + failed + ' couldn’t be fetched (marked red, with the reason)' : '') + ' across ' + (accountsDone ? accountsDone + ' account' + (accountsDone === 1 ? '' : 's') : pages + ' page' + (pages === 1 ? '' : 's')) + '. They import in the background — ');
     // where they went: Banking Aid's Import page lists them card by card
     const see = make('a', 'color:#7db7ff', 'see them in Banking Aid');
     see.href = (cfg && cfg.url ? cfg.url.replace(/\/$/, '') : '') + '/#import';
