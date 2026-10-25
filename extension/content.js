@@ -516,6 +516,13 @@
   // code and number; banks that list one account's statements at a time
   // need every account picked in turn
   const ACCT = /\b\d{2}-\d{2}-\d{2}\s+(\d{8})\b/;
+  // an account's name as the page shows it: not its number, balance, links,
+  // or the screen-reader words spelling them out ("sort code 2 0 4 6 8 3")
+  const acctName = t => t.replace(ACCT, ' ')
+    .replace(/\b(sort code|account number|account no\.?|ac)\b[\s\d-]*/gi, ' ')
+    .replace(/[-−]?£\s?[-−]?[\d,]+(\.\d{2})?/g, ' ')
+    .replace(/\b(available balance|current balance|balance|show recent transactions|recent transactions|view transactions|select)\b/gi, ' ')
+    .replace(/[›>»]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   const accountChoices = () => {
     const out = [];
     everything(document.body, n => {
@@ -653,7 +660,8 @@
     await save();
     await back();
     if (ok && it?.isNew) it.sent++;
-    if (ok) { say('Banking Aid is reading ' + h.card + ' ' + h.date + '…'); await settle(); }
+    // a new account takes every statement: no need to wait for each to be read
+    if (ok && !it?.isNew) { say('Banking Aid is reading ' + h.card + ' ' + h.date + '…'); await settle(); }
     // still on the list after Banking Aid read it (it wasn't the statement): wanted again
     if (it && it.status === 'fetching') it.status = 'wanted';
     hits = findHits(); render();
